@@ -1,0 +1,18 @@
+[submodule "Plonky3"]
+	path = Plonky3
+	url = ./Plonky3
+[submodule "sol-whir"]
+	path = sol-whir
+	url = ./sol-whir
+[submodule "spartan-whir"]
+	path = spartan-whir
+	url = ./spartan-whir
+[submodule "Spartan2"]
+	path = Spartan2
+	url = ./Spartan2
+[submodule "whir-old"]
+	path = whir-old
+	url = ./whir-old
+[submodule "whir-p3"]
+	path = whir-p3
+	url = ./whir-p3

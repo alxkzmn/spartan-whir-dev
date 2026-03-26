@@ -1,0 +1,3 @@
+[workspace]
+members = ["spartan-whir-export"]
+resolver = "2"

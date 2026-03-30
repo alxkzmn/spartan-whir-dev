@@ -284,6 +284,7 @@ Both quartic and octic extensions use the binomial irreducible polynomial X^d - 
 - Quartic standalone WHIR success and failure fixtures (binary ABI-encoded, loaded in Solidity via `vm.readFileBinary` + `abi.decode`). The initial failure set should include at least:
   - tampered commitment
   - tampered STIR query opening with commitments and OOD answers left unchanged
+  - tampered initial OOD answer (expected to surface as an OOD failure and/or downstream transcript mismatch)
 - Transcript checkpoint traces: every `observe` and `sample` call recorded with the challenger state, for byte-level parity testing
 - Field arithmetic test vectors: random tuples (a, b, a+b, a-b, ab, a^-1) for base field, quartic extension, and octic extension
 - Merkle test vectors: leaf hashes, node compressions, multiproof verification cases
@@ -365,7 +366,7 @@ The full WHIR verification loop inside `finalize` (from [whir-p3/src/whir/verifi
 **Milestones:**
 
 1. Quartic standalone WHIR verifier passes Rust success fixtures.
-2. Quartic verifier correctly rejects tampered proofs: tampered commitment, tampered STIR query opening, tampered Merkle path or query data, tampered sumcheck data, transcript mismatch.
+2. Quartic verifier correctly rejects tampered proofs: tampered commitment, tampered initial OOD answer / transcript mismatch, tampered STIR query opening, tampered Merkle path or query data, tampered sumcheck data, transcript mismatch.
 3. Quartic runtime-config verifier correctly rejects config mismatches: wrong `whirFsPattern`, wrong `effectiveDigestBytes`, wrong round parameters or query counts, wrong `finalRoundConfig.numQueries` or `finalSumcheckRounds` presence expectations.
 4. Octic standalone WHIR verifier passes using the same core logic with `WhirVerifier8.sol`.
 5. Gas benchmarks for both quartic and octic configurations.
@@ -538,6 +539,7 @@ graph TD
 - **Standalone WHIR** (Stage 4):
   - Successful verification (quartic, octic).
   - Rejection of tampered commitment.
+  - Rejection of tampered initial OOD answer / transcript mismatch.
   - Rejection of tampered STIR query opening.
   - Rejection of tampered Merkle path or query data.
   - Rejection of tampered sumcheck data.

@@ -4,7 +4,7 @@ overview: Plan the step-by-step implementation of a Solidity verifier for the Sp
 todos:
   - id: stage0
     content: "Stage 0: Freeze ABI schema + Foundry project + Rust fixture/export tooling"
-    status: pending
+    status: completed
   - id: stage1
     content: "Stage 1: KoalaBear base field + quartic/octic extension arithmetic (quartic-first, octic-ready)"
     status: pending

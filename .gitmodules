@@ -16,3 +16,9 @@
 [submodule "whir-p3"]
 	path = whir-p3
 	url = ./whir-p3
+[submodule "sol-spartan-whir"]
+	path = sol-spartan-whir
+	url = ./sol-spartan-whir
+[submodule "spartan-whir-export"]
+	path = spartan-whir-export
+	url = ./spartan-whir-export

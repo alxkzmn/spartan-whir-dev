@@ -1,24 +1,24 @@
 [submodule "Plonky3"]
 	path = Plonky3
-	url = ./Plonky3
+	url = https://github.com/Plonky3/Plonky3.git
 [submodule "sol-whir"]
 	path = sol-whir
-	url = ./sol-whir
+	url = https://github.com/privacy-ethereum/sol-whir.git
 [submodule "spartan-whir"]
 	path = spartan-whir
-	url = ./spartan-whir
+	url = https://github.com/alxkzmn/spartan-whir.git
 [submodule "Spartan2"]
 	path = Spartan2
-	url = ./Spartan2
+	url = https://github.com/microsoft/Spartan2.git
 [submodule "whir-old"]
 	path = whir-old
-	url = ./whir-old
+	url = https://github.com/dmpierre/whir.git
 [submodule "whir-p3"]
 	path = whir-p3
-	url = ./whir-p3
+	url = https://github.com/alxkzmn/whir-p3.git
 [submodule "sol-spartan-whir"]
 	path = sol-spartan-whir
-	url = ./sol-spartan-whir
+	url = https://github.com/alxkzmn/sol-spartan-whir.git
 [submodule "spartan-whir-export"]
 	path = spartan-whir-export
-	url = ./spartan-whir-export
+	url = https://github.com/alxkzmn/spartan-whir-export.git

@@ -98,8 +98,9 @@ The internal architecture supports **octic (degree-8) extensions from the start*
 - **Quartic first, octic second.** Quartic extensions (4 coefficients per element) are simpler to implement and debug. Octic extensions (8 coefficients) are added before the full Spartan verifier is considered complete.
 - **Two concrete verifier families via template-generated specialization.** Solidity has no generics. Extension-dependent modules (`WhirVerifierCore`, `WhirSumcheck`, `SpartanSumcheck`) are written as templates with a placeholder extension library import. The `spartan-whir-export` crate performs simple string substitution to produce two specialized copies (e.g., `WhirVerifierCore4.sol` and `WhirVerifierCore8.sol`) with the correct extension library wired at code-generation time. Extension-independent modules (`KeccakChallenger`, `MerkleVerifier`, `KoalaBear`, `SpartanEvaluator`) are shared. There is no runtime branching or virtual function dispatch on extension degree.
 - **Standalone WHIR has two contract types:**
-  - **Debug verifiers** (`WhirVerifierDebug4.sol` / `WhirVerifierDebug8.sol`): accept `ExpandedWhirConfig` and `WhirStatement` as runtime ABI inputs. Used for testing and debugging across different WHIR configurations without recompilation.
+  - **Runtime-config verifiers** (`WhirVerifierDebug4.sol` / `WhirVerifierDebug8.sol`): accept `ExpandedWhirConfig` and `WhirStatement` as runtime ABI inputs. Used for testing and debugging across different WHIR configurations without recompilation.
   - **Fixed-config verifiers** (`WhirVerifier4.sol` / `WhirVerifier8.sol`): all config values are compile-time constants. Used for gas benchmarks and production deployment.
+- **Schedule-generic verifier core from the start.** The first standalone WHIR verifier core is implemented against the derived round schedule (`roundParameters`, `finalSumcheckRounds`, and any explicit final-phase schedule fields exported later if needed). Do **not** build a constant-only core first and generalize it later. The Schedule Tuning Pass chooses which schedule is frozen into fixtures and fixed-config wrappers; it does not change the core architecture target.
 - **Circuit-specific full Spartan verifier via generated Solidity.** The Rust code-generation tool emits Solidity constant definitions and sparse R1CS matrix data for a specific circuit. The `SpartanEvaluator` reads this data to verify inner relation checks. For any non-trivial circuit, the matrix data will exceed the EVM's 24576-byte contract size limit if stored inline. Therefore, the `SpartanEvaluator` API is designed from the start to abstract over the data source: inline constants for small test circuits, auxiliary code-as-data contracts (read via `EXTCODECOPY`) for realistic circuits. This transition does not change the evaluator's function signatures.
 - **Optimization after correctness.** The baseline arithmetic uses simple, obviously-correct modular reductions (one reduction per operation). Performance-critical functions ("hot kernels") are isolated as separate internal functions so that optimized versions (e.g., with delayed modular reduction) can replace them later without changing callers.
 
@@ -143,9 +144,9 @@ All Solidity-facing proof and config structs are defined in Stage 0 before the R
 - `uint256[] initialOodAnswers` -- out-of-domain evaluation answers for the initial commitment (extension elements).
 - `SumcheckData initialSumcheck` -- initial folding sumcheck data.
 - `WhirRoundProof[] rounds` -- one entry per WHIR folding round.
-- `uint256[] finalPoly` -- **required** (not optional). The final polynomial evaluations (extension elements). The prover always populates this field. The verifier will reject the proof if it is missing ([whir-p3/src/whir/verifier/mod.rs](whir-p3/src/whir/verifier/mod.rs) line 152).
+- `uint256[] finalPoly` -- **required** (not optional). The full evaluation table of the final residual polynomial over the remaining Boolean hypercube (extension elements, length = `2^finalSumcheckRounds`). The prover always populates this field. The verifier will reject the proof if it is missing ([whir-p3/src/whir/verifier/mod.rs](whir-p3/src/whir/verifier/mod.rs) line 152). The Solidity verifier should also reject if the decoded length is not exactly `2^finalSumcheckRounds`. The same vector is used in two ways by the verifier: final STIR checks interpret it as coefficients of a univariate polynomial and evaluate it via Horner's method, while the final sumcheck check interprets it as multilinear hypercube evaluations and evaluates it at the final sumcheck point.
 - `uint256 finalPowWitness` -- proof-of-work witness for the final phase.
-- `bool finalQueryBatchPresent` -- `true` if `finalQueries > 0` in the config.
+- `bool finalQueryBatchPresent` -- `true` if `finalRoundConfig.numQueries > 0` in the config.
 - `QueryBatchOpening finalQueryBatch` -- final STIR query opening. When `finalQueryBatchPresent` is `false`, this struct is present but contains empty/zero values.
 - `bool finalSumcheckPresent` -- `true` if `finalSumcheckRounds > 0` in the config.
 - `SumcheckData finalSumcheck` -- final sumcheck data. When `finalSumcheckPresent` is `false`, this struct is present but contains empty arrays.
@@ -154,7 +155,7 @@ All Solidity-facing proof and config structs are defined in Stage 0 before the R
 
 ### Config and statement structs
 
-**ExpandedWhirConfig** (for the debug verifiers; matches the fully-expanded `WhirConfig` from [whir-p3/src/whir/parameters.rs](whir-p3/src/whir/parameters.rs) lines 43-72). The Rust exporter derives the expanded config by calling `WhirConfig::new(...)` and exports it directly. The Solidity verifier does **not** re-derive round parameters on-chain.
+**ExpandedWhirConfig** (for the runtime-config verifiers; matches the fully-expanded `WhirConfig` from [whir-p3/src/whir/parameters.rs](whir-p3/src/whir/parameters.rs) lines 43-72). The Rust exporter derives the expanded config by calling `WhirConfig::new(...)` and exports the **fully derived verifier-ready schedule** directly: all explicit WHIR folding rounds in `roundParameters`, plus an explicit `finalRoundConfig` for the final STIR phase. The Solidity verifier does **not** re-derive round parameters on-chain.
 
 - `uint256 numVariables` -- number of variables in the committed multilinear polynomial.
 - `uint256 securityLevel` -- target security level in bits.
@@ -162,16 +163,12 @@ All Solidity-facing proof and config structs are defined in Stage 0 before the R
 - `uint256 commitmentOodSamples` -- number of OOD samples for the initial commitment.
 - `uint256 startingLogInvRate` -- log2 of the initial Reed-Solomon inverse rate.
 - `uint256 startingFoldingPowBits` -- PoW bits for the initial folding phase.
-- `uint256 foldingFactor` -- number of variables folded per round. This plan supports only `FoldingFactor::Constant`, matching `spartan-whir`'s usage ([spartan-whir/src/whir_pcs.rs](spartan-whir/src/whir_pcs.rs) line 311). The `ConstantFromSecondRound` variant in `whir-p3` is not used.
 - `uint256 rsDomainInitialReductionFactor` -- domain reduction factor for the first round.
-- `uint256 finalQueries` -- number of STIR queries in the final phase.
-- `uint256 finalPowBits` -- PoW bits for the final phase.
 - `uint256 finalSumcheckRounds` -- number of sumcheck rounds in the final phase.
-- `uint256 finalFoldingPowBits` -- PoW bits for the final folding phase.
 - `uint8 soundnessAssumption` -- 0 = UniqueDecoding, 1 = JohnsonBound, 2 = CapacityBound. Included for completeness and diagnostics; the Solidity verifier consumes only the derived per-round fields, not this value directly.
 - `uint32 merkleSecurityBits` -- Merkle tree security parameter. Included for diagnostics.
 - `uint8 effectiveDigestBytes` -- number of non-masked bytes in each Merkle digest. Derived from `merkleSecurityBits` by the Rust exporter using [spartan-whir/src/hashers.rs](spartan-whir/src/hashers.rs) `effective_digest_bytes_for_security_bits` (line 23). The Solidity Merkle verifier uses this value for leaf hashing, node compression, and digest masking.
-- `uint256[] whirFsPattern` -- the WHIR Fiat-Shamir domain-separator pattern. This is a sequence of base-field elements that the verifier observes into the challenger before processing the proof. The Rust exporter produces it by building the domain separator via `commit_statement` + `add_whir_proof` and serializing the resulting pattern ([whir-p3/src/fiat_shamir/domain_separator.rs](whir-p3/src/fiat_shamir/domain_separator.rs) line 86, [spartan-whir/src/whir_pcs.rs](spartan-whir/src/whir_pcs.rs) line 326). For fixed-config verifiers, this is a compile-time constant. For debug verifiers, it is a runtime ABI input.
+- `uint256[] whirFsPattern` -- the WHIR Fiat-Shamir domain-separator pattern. This is a sequence of base-field elements that the verifier observes into the challenger before processing the proof. The Rust exporter produces it by building the domain separator via `commit_statement` + `add_whir_proof` and serializing the resulting pattern ([whir-p3/src/fiat_shamir/domain_separator.rs](whir-p3/src/fiat_shamir/domain_separator.rs) line 86, [spartan-whir/src/whir_pcs.rs](spartan-whir/src/whir_pcs.rs) line 326). For fixed-config verifiers, this is a compile-time constant. For runtime-config verifiers, it is a runtime ABI input.
 - `RoundConfig[] roundParameters` -- one entry per WHIR folding round, where each `RoundConfig` contains:
   - `uint256 powBits`
   - `uint256 foldingPowBits`
@@ -181,8 +178,9 @@ All Solidity-facing proof and config structs are defined in Stage 0 before the R
   - `uint256 foldingFactor`
   - `uint256 domainSize`
   - `uint256 foldedDomainGen` -- generator of the folded evaluation domain (a base-field element). Used to compute STIR challenge points as `foldedDomainGen^index mod p`.
+- `RoundConfig finalRoundConfig` -- explicit derived config for the final STIR phase. This uses the same field layout as the ordinary WHIR rounds so the runtime-config verifier can consume one verifier-ready schedule shape throughout. `finalRoundConfig.numQueries` determines whether `finalQueryBatch` must be present. `finalSumcheckRounds` remains separate because it controls the size of `finalPoly` and the optional final sumcheck transcript/data.
 
-**WhirStatement** (for the debug verifiers; matches the point-evaluation claims produced by the Spartan layer):
+**WhirStatement** (for the runtime-config verifiers; matches the point-evaluation claims produced by the Spartan layer):
 
 - `uint256[][] points` -- each inner array is a multilinear evaluation point (extension elements).
 - `uint256[] evaluations` -- claimed polynomial evaluations at the corresponding points (extension elements, one per point).
@@ -235,8 +233,8 @@ spartan-p3/
 |   |   |   +-- WhirVerifierCore8.sol  # template-generated, uses KoalaBearExt8
 |   |   |   +-- WhirVerifier4.sol      # quartic fixed-config wrapper (benchmarks/production)
 |   |   |   +-- WhirVerifier8.sol      # octic fixed-config wrapper
-|   |   |   +-- WhirVerifierDebug4.sol # quartic debug verifier (runtime ExpandedWhirConfig)
-|   |   |   +-- WhirVerifierDebug8.sol # octic debug verifier (runtime ExpandedWhirConfig)
+|   |   |   +-- WhirVerifierDebug4.sol # quartic runtime-config verifier (runtime ExpandedWhirConfig)
+|   |   |   +-- WhirVerifierDebug8.sol # octic runtime-config verifier (runtime ExpandedWhirConfig)
 |   |   +-- spartan/
 |   |   |   +-- SpartanStructs.sol     # Spartan-level struct definitions
 |   |   |   +-- SpartanSumcheck4.sol   # template-generated, uses KoalaBearExt4
@@ -299,7 +297,7 @@ Both quartic and octic extensions use the binomial irreducible polynomial X^d - 
 - Isolate performance-critical functions as separate internal functions:
   - Coefficient unpack/pack (between packed `uint256` and individual coefficients)
   - Base-field multiply and reduce
-  - Dot-product accumulation
+  - Dot-product accumulation (in the baseline, this can stay inside `_mul_coeffs`. Later, in Stage 6, we can replace the internals of `_mul_coeffs` with a faster delayed-reduction version, or a fused version (combine multiple steps into one pass to avoid repeated unpack/pack and temporary intermediates), without changing callers.)
   - Multilinear fold and equality-polynomial evaluation helpers
   - Sumcheck round evaluation (`extrapolate_012`: Lagrange extrapolation through points 0, 1, 2)
 - Validate representation choices (how coefficients are packed into `uint256`) with gas microbenchmarks.
@@ -308,6 +306,7 @@ Both quartic and octic extensions use the binomial irreducible polynomial X^d - 
 
 ### Stage 2: Challenger / transcript parity
 
+- Start this stage with transcript traces generated from the current Rust baseline schedule (`FoldingFactor::Constant(whir.folding_factor)`). The challenger implementation itself is schedule-agnostic; if the schedule is changed later, regenerate the traces for the chosen schedule and rerun the same parity tests.
 - Implement `KeccakChallenger.sol` to match the behavior of the Rust `SerializingChallenger32<KoalaBear, HashChallenger<u8, Keccak256Hash, 32>>` path used by `spartan-whir`.
 - **Do not implement the challenger from documentation or memory. Implement it from exported Rust transcript traces.** The only safe specification is "the Solidity challenger must produce the exact same observe/sample sequence as the Rust challenger, byte for byte, on the same inputs."
 - Spartan transcript context observation (reference: [spartan-whir/src/protocol.rs](spartan-whir/src/protocol.rs) lines 313-318):
@@ -315,7 +314,7 @@ Both quartic and octic extensions use the binomial irreducible polynomial X^d - 
   2. Compute `keccak256(preimage)` to produce a 32-byte digest.
   3. Observe that **32-byte digest** (as a `Hash<F, u8, 32>` object) into the challenger. Do **not** observe the raw 76-byte preimage.
   4. Observe each public input as a base-field element.
-- WHIR domain-separator observation: Stage 0 exports the exact WHIR Fiat-Shamir pattern for each config. The fixed-config verifiers bake this pattern as a compile-time constant. The debug verifiers receive it as part of the `ExpandedWhirConfig` runtime ABI input (`uint256[] whirFsPattern`).
+- WHIR domain-separator observation: Stage 0 exports the exact WHIR Fiat-Shamir pattern for each config. The fixed-config verifiers bake this pattern as a compile-time constant. The runtime-config verifiers receive it as part of the `ExpandedWhirConfig` runtime ABI input (`uint256[] whirFsPattern`).
 - Tests must compare observe-sequence parity, challenge-sequence parity, and full checkpoint parity against fixed Rust-generated fixtures.
 
 ### Stage 3: Merkle layer
@@ -334,9 +333,13 @@ Split the verifier into these Solidity files:
 - `WhirSumcheck4.sol` / `WhirSumcheck8.sol`: sumcheck verification logic, template-generated with the correct extension library.
 - `WhirVerifierCore4.sol` / `WhirVerifierCore8.sol`: round parsing, STIR query processing, fold computation, constraint evaluation, template-generated.
 - `WhirVerifier4.sol` / `WhirVerifier8.sol`: thin wrappers with fixed (compile-time) configuration for gas benchmarks and production use.
-- `WhirVerifierDebug4.sol` / `WhirVerifierDebug8.sol`: debug verifiers that accept `ExpandedWhirConfig` + `WhirStatement` as runtime ABI inputs.
+- `WhirVerifierDebug4.sol` / `WhirVerifierDebug8.sol`: runtime-config verifiers that accept `ExpandedWhirConfig` + `WhirStatement` as runtime ABI inputs.
+
+The runtime-config verifier core must be schedule-generic at the round level: it reads the derived verifier-ready schedule from the expanded config rather than assuming that one global scalar applies to every round. In the current schema that means `roundParameters[i]`, `finalRoundConfig`, and `finalSumcheckRounds`. Fixed-config wrappers may still bake the chosen schedule as compile-time constants.
 
 The verification logic is based on the current `whir-p3` verifier ([whir-p3/src/whir/verifier/mod.rs](whir-p3/src/whir/verifier/mod.rs)), not the older `sol-whir`.
+
+**Input range validation:** Base-field arithmetic (`KoalaBear.add`/`sub`/`mul`) assumes inputs are in `[0, p)` and does not check. This is safe for internally-produced values (all operations produce reduced outputs), but ABI-decoded proof data enters the field layer at the Stage 4 boundary. The proof-decode entry point must validate that every base-field element and every packed extension coefficient is `< MODULUS` before passing values into arithmetic. This is a system-boundary check, not a per-operation check.
 
 **Stack depth and memory management:** The WHIR verification loop maintains many simultaneous variables: challenger state, running claimed evaluation, folding randomness accumulated across rounds, domain parameters, constraint state, and parsed commitment data. Solidity's 16-variable stack limit will require scoped blocks, memory structs, and helper functions in the baseline implementation. This is a structural requirement for the code to compile, not a deferred optimization. Memory-budget profiling (tracking temporary array sizes and peak memory usage) should be part of baseline gas measurement.
 
@@ -353,17 +356,44 @@ The full WHIR verification loop inside `finalize` (from [whir-p3/src/whir/verifi
 
 1. Merge the parsed commitment's OOD statement with the user-provided evaluation statement.
 2. Build the initial constraint (`EqStatement` + `SelectStatement`), compute `combine_evals`.
-3. Run the initial sumcheck (`folding_factor` rounds).
-4. For each WHIR round: parse the round commitment, check proof-of-work, sample STIR query indices (sample random bits from the challenger, construct indices, sort and deduplicate using Solady's `LibSort`), verify the Merkle multiproof (expects sorted indices), compute fold values via `evaluate_hypercube_ext` on the opened leaf rows, build the round's constraint, run the round's sumcheck.
+3. Run the initial sumcheck using the first-round folding schedule for the chosen config (for today's Rust wiring this is the single `folding_factor`; under `ConstantFromSecondRound` it is the first-round factor).
+4. For each WHIR round: fetch that round's derived parameters from `roundParameters`, parse the round commitment, check proof-of-work, sample STIR query indices (sample random bits from the challenger, construct indices, sort and deduplicate using Solady's `LibSort`), verify the Merkle multiproof (expects sorted indices), compute fold values via `evaluate_hypercube_ext` on the opened leaf rows, build the round's constraint, run the round's sumcheck.
 5. Final phase: observe the final polynomial into the challenger, verify final STIR queries, run the optional final sumcheck (if `finalSumcheckRounds > 0`), check the closing equation via `ConstraintPolyEvaluator`.
 
 **Milestones:**
 
 1. Quartic standalone WHIR verifier passes Rust success fixtures.
 2. Quartic verifier correctly rejects tampered proofs: tampered commitment, tampered Merkle path or query data, tampered sumcheck data, transcript mismatch.
-3. Quartic debug verifier correctly rejects config mismatches: wrong `whirFsPattern`, wrong `effectiveDigestBytes`, wrong round parameters or query counts, wrong `finalQueries` or `finalSumcheckRounds` presence expectations.
+3. Quartic runtime-config verifier correctly rejects config mismatches: wrong `whirFsPattern`, wrong `effectiveDigestBytes`, wrong round parameters or query counts, wrong `finalRoundConfig.numQueries` or `finalSumcheckRounds` presence expectations.
 4. Octic standalone WHIR verifier passes using the same core logic with `WhirVerifier8.sol`.
 5. Gas benchmarks for both quartic and octic configurations.
+
+### Schedule Tuning Pass (after Stage 4, before Stage 5)
+
+The verifier core is schedule-generic regardless of which schedule is selected. This pass decides which schedule is frozen into the remaining fixtures, benchmarks, and any fixed-config wrappers after we already have a working standalone WHIR verifier and first gas numbers.
+
+1. Use the current Rust `FoldingFactor::Constant(whir.folding_factor)` schedule as the baseline implementation path through Stages 2-4.
+2. After Stage 4 is passing, compare the current baseline against candidate schedules on the same statements and security settings. Start with the current `Constant(4)` baseline and, if valid for the chosen statements, `ConstantFromSecondRound(3,4)` as the first candidate. This is not a claim that `(3,4)` is always optimal; it is the first comparison point because it perturbs only the first round while keeping the later-round factor at `4`, which keeps the search space small and isolates whether "smaller first fold, same later folds" helps.
+3. For each candidate, generate real typed-ABI fixtures and record:
+   - proof bytes
+   - number of WHIR rounds
+   - per-round folding factors and opened leaf widths (`2^foldingFactor`)
+   - per-round query counts and OOD sample counts
+   - `finalSumcheckRounds`
+   - `finalPoly.length`
+4. Run the same standalone runtime-config verifier on those fixtures and compare actual verifier gas, not just Rust-side proof metrics.
+5. Use verifier-work proxies only as supporting diagnostics:
+   - Merkle/query workload proxy: `sum(numQueries * 2^foldingFactor)` across all rounds
+   - hypercube-fold workload proxy: same per-round opened leaf widths
+   - final-phase workload proxy: `finalPoly.length` and `finalSumcheckRounds`
+6. Decision rule: switch schedules only if proof bytes decrease materially and runtime-config verifier gas does not clearly worsen. If results are mixed, keep `Constant`.
+7. Freeze the chosen schedule before Stage 5, Stage 6 optimization work, Stage 7 blob benchmarking, and any production-shaped fixed-config wrappers.
+8. If a `ConstantFromSecondRound` schedule wins and is adopted:
+   - update Rust-side config construction to build that schedule
+   - regenerate expanded-config fixtures, `whirFsPattern`, and transcript traces
+   - ensure the exported config surface continues to describe the chosen schedule fully in verifier-ready form (`roundParameters`, `finalRoundConfig`, `finalSumcheckRounds`)
+   - rerun Stage 2 and Stage 4 test/benchmark coverage on the chosen schedule
+   - regenerate any fixed-config Solidity wrappers/constants for the chosen schedule
 
 ### Stage 5: Full Spartan verifier
 
@@ -420,6 +450,21 @@ After quartic + octic standalone WHIR and full Spartan verifiers all pass:
   - Sumcheck round evaluation (`extrapolate_012`).
   - Merkle hashing and memory management (inline assembly).
 - If profiling shows the generic COO sparse evaluator is a significant cost center, consider replacing it with unrolled straight-line code generated by the Rust tool.
+- **Octic inversion** (`ext8Inv`): Stage 1 baseline uses the generic Frobenius-norm loop (7 iterations of Frobenius + full extension mul), costing ~217k gas vs ~29k for quartic. Plonky3 has an optimized `quartic_inv` using a tower decomposition `F < F[X²−W] < F[X⁴−W]`; an analogous octic tower (quartic over quadratic) could cut this significantly. Low priority unless profiling shows inversions are a material fraction of total verifier gas.
+
+**Stage 1 baseline gas (from FieldHarness, includes external call overhead):**
+
+| Operation              | Ext4        | Ext8        |
+| ---------------------- | ----------- | ----------- |
+| add                    | 2.4k        | 4.3k        |
+| sub                    | 2.7k        | 4.1k        |
+| mul                    | 9.0k        | 31.8k       |
+| inv                    | 28.7k       | 216.6k      |
+| pack / unpack          | 2.1k / 1.8k | 3.4k / 3.2k |
+| evaluate_hypercube(16) | 199k        | 592k        |
+| extrapolate_012        | 66k         | 215k        |
+| eq_poly_eval(3)        | 76k         | 155k        |
+
 - **Every optimization requires:**
   - Differential tests against the unoptimized baseline kernel.
   - Before/after gas snapshots on identical fixtures.
@@ -495,7 +540,7 @@ graph TD
   - Rejection of tampered sumcheck data.
   - Rejection on final-check failure.
   - Rejection on transcript mismatch.
-  - Debug verifier config-mismatch rejection: wrong `whirFsPattern`, wrong `effectiveDigestBytes`, wrong round parameters or query counts, wrong `finalQueries` or `finalSumcheckRounds` presence expectations.
+  - Runtime-config verifier config-mismatch rejection: wrong `whirFsPattern`, wrong `effectiveDigestBytes`, wrong round parameters or query counts, wrong `finalRoundConfig.numQueries` or `finalSumcheckRounds` presence expectations.
 - **Full Spartan** (Stage 5):
   - Successful verification (quartic, octic).
   - Rejection of tampered outer claims.
@@ -519,7 +564,7 @@ graph TD
 - First correctness milestone is **quartic standalone WHIR**.
 - Octic support is required in the near term. The internal architecture supports it from the start.
 - Quartic and octic verifiers are separate concrete contracts, not one contract branching at runtime.
-- Standalone WHIR provides both debug verifiers (runtime `ExpandedWhirConfig`) and fixed-config verifiers (compile-time constants).
+- Standalone WHIR provides both runtime-config verifiers (runtime `ExpandedWhirConfig`) and fixed-config verifiers (compile-time constants).
 - The full Spartan verifier is circuit-specific, with Rust-generated Solidity constants.
 - Baseline evaluator: shared generic library with COO data-source abstraction. Inline constants for small test circuits, auxiliary data contracts for realistic circuits. Not replaced with unrolled code unless gas measurements require it.
 - The typed ABI with `abi.encode`/`abi.decode` is the first correctness path. Binary blob decoding is a later calldata optimization.
@@ -527,9 +572,9 @@ graph TD
 - The WHIR Fiat-Shamir domain-separator pattern is exported from Rust and provided as a constant or runtime input. It is not re-derived in Solidity.
 - The Spartan domain-separator is stored as a precomputed 32-byte hash constant in generated code. The 76-byte preimage is exported separately for parity tests only.
 - The `QueryBatchOpening` base-vs-extension variant uses an explicit `kind` tag in the typed ABI, matching the Rust proof format.
-- `final_poly` is required in the typed ABI (the verifier rejects proofs where it is missing). `final_query_batch` and `final_sumcheck` use explicit `bool present` flags; presence is determined by config (`finalQueries > 0` and `finalSumcheckRounds > 0` respectively).
-- This plan supports only `FoldingFactor::Constant`, matching the hardcoded usage in `spartan-whir` ([spartan-whir/src/whir_pcs.rs](spartan-whir/src/whir_pcs.rs) line 311). The `ConstantFromSecondRound` variant available in `whir-p3` is not exposed.
-- The WHIR Fiat-Shamir domain-separator pattern is included in `ExpandedWhirConfig` as a runtime `uint256[]` field for the debug verifiers, and baked as a compile-time constant for the fixed-config verifiers.
+- `final_poly` is required in the typed ABI (the verifier rejects proofs where it is missing). It is the full evaluation table of the final residual polynomial. The verifier uses the same vector both for final STIR checks (as univariate coefficients evaluated via Horner) and for the final sumcheck check (as multilinear hypercube evaluations). `final_query_batch` and `final_sumcheck` use explicit `bool present` flags; presence is determined by config (`finalRoundConfig.numQueries > 0` and `finalSumcheckRounds > 0` respectively).
+- Current `spartan-whir` wiring uses `FoldingFactor::Constant`, because the public config surface exposes only one `whir.folding_factor` scalar and `build_whir_config` maps that scalar directly to `FoldingFactor::Constant` ([spartan-whir/src/whir_pcs.rs](spartan-whir/src/whir_pcs.rs) line 311). The Solidity runtime-config verifier core is intentionally planned to be schedule-generic from the first implementation: it should consume the fully derived verifier-ready schedule (`roundParameters`, `finalRoundConfig`, `finalSumcheckRounds`), so that adopting `ConstantFromSecondRound` does not require rewriting the core verification loop or changing the proof ABI. What does change is the derived config, the WHIR Fiat-Shamir pattern, fixed-config wrappers/constants, and any exported schedule fields/artifacts that must be regenerated for the chosen schedule. Follow the Schedule Tuning Pass after Stage 4 baseline correctness/gas and before Stage 5+: compare proof bytes and actual standalone verifier gas, then freeze the schedule and regenerate the affected fixtures/artifacts for the chosen schedule.
+- The WHIR Fiat-Shamir domain-separator pattern is included in `ExpandedWhirConfig` as a runtime `uint256[]` field for the runtime-config verifiers, and baked as a compile-time constant for the fixed-config verifiers.
 - Build and verify against `spartan-whir` without the `keccak_no_prefix` feature flag (default behavior: Keccak leaf and node hashing uses domain-separation prefix bytes `0x00` and `0x01`).
 - STIR query index sorting uses Solady's `LibSort` or an equivalent sorting library. Sorting gas is a known cost factor.
 - The WHIR Fiat-Shamir domain-separator pattern length should be recorded as part of Stage 0 fixture metadata for bytecode-size estimation.

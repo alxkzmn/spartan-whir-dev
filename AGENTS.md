@@ -167,7 +167,7 @@ The file contains two contracts:
 
 | Component           | Gas     | Notes                                                                                       |
 | ------------------- | ------- | ------------------------------------------------------------------------------------------- |
-| Total verify        | ~1,298k | `testGasWhirVerifyFixed`                                                                    |
+| Total verify        | ~1,304k | `testGasWhirVerifyFixed`                                                                    |
 | STIR (all 3 rounds) | ~627k   | 48% of total. Dominated by rowFolding and merkleReduction (both already assembly-optimized) |
 | Constraint eval     | ~219k   | 17% of total. eq-poly and select-poly evaluation                                            |
 | Sumchecks (all 4)   | ~124k   | 10% of total. ~31k per sumcheck round                                                       |

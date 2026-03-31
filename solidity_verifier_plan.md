@@ -419,6 +419,7 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - after assembly pointer loads in `_eqPolyEvalAt` + struct field preloading: `1,318,285`
   - after Horner `_combineInitialConstraintEvals` (backward iteration, 1 mul/iter): `1,316,801`
   - after removing redundant `validatePackedExt4` on proof data and memory values: `1,298,308`
+  - after restoring `validatePackedExt4Calldata` for `statement.points` in fixed verifier path: `1,304,440`
 - Accepted optimizations (continued):
   - assembly `_computeRootFromLeafHashes20`: interleaved (index, hash) buffers, inline keccak with cached scratch pointer, raw pointer arithmetic eliminating bounds checks and `compressNode20` calls
   - fused assembly `_computeEqTerm`: computes `1 + 2pq - p - q` per-lane in a single assembly block
@@ -430,11 +431,13 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - Horner scheme in `_combineInitialConstraintEvals`: backward iteration halving ext4 muls per iteration
   - assembly `KoalaBear.pow`: inline assembly `mulmod` loop
   - redundant `validatePackedExt4` removal: proof values observed into transcript (non-canonical → different Keccak → rejection) and memory values from challenger samples (inherently canonical) no longer validated; public statement input validation retained
+  - restored `validatePackedExt4Calldata(statement.points[i])` in `_evaluateInitialConstraint`: the fixed verifier path bypassed `_concatenateEq` where validation existed, leaving public-input points unchecked
+  - corrected 3 hardcoded `bytes4` error selectors in assembly `_computeRootFromLeafHashes20` (`InsufficientDecommitments` 0x90196ee3, `TrailingDecommitments` 0xb48ec3d2, `InvalidFinalLayer` 0x1d729656)
 - Rejected optimizations (continued):
   - Horner scheme in `_evaluateConstraint`, `_combineConstraintEvals`, `_evaluateInitialConstraint`: all three caused `stack-too-deep` because the reversed loop adds one extra live variable beyond the 16-slot Yul stack limit when `_eqPolyEvalAt` is inlined
   - low-level assembly rewrite of `_mul_packed`: +208k gas regression (compiler optimizes the Solidity version better)
 - Current steady-state measurements after the accepted Stage 4 pass:
-  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,298,308`
+  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,304,440`
   - direct verification transaction (`EOA -> WhirVerifier4.verify(...)`): remeasure on the next unrestricted run; the previous directly measured value on the earlier revision was `2,011,238`
   - execution remainder after intrinsic gas and calldata gas: remeasure together with the next direct transaction benchmark
   - calldata bytes for the current typed ABI entrypoint: `23,620`

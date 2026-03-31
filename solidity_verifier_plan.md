@@ -377,12 +377,17 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - unchecked row loaders in STIR/final-row evaluators, relying on prior batch validation or Merkle leaf validation instead of re-validating every row element during folding
   - two-buffer Merkle frontier reuse in `_computeRootFromLeafHashes`, eliminating per-level frontier array allocation while preserving the existing deduplication behavior
   - corrected `_mulByEqTerm` path in `_eqPolyEvalAt`, eliminating the intermediate packed eq term without changing the final constraint result
+  - fixed 20-byte Merkle digest specialization (`computeRootFromFlat*Rows20`, `hashLeaf*Slice20`, `compressNode20`) for the fixed-config verifier path
+  - fused `_selectPolyEvalAt` accumulator loop (keep unpacked accumulator coefficients across the whole variable loop instead of re-unpacking per term)
+  - fused `_eqPolyEvalAt` accumulator loop (same strategy while preserving the existing `p * q` computation)
+  - fixed-only no-copy initial eq path in `WhirVerifier4` (remove `_statementFromCalldata` / `_concatenateEq` from the success path and treat user statement points plus OOD points as two logical segments)
 - Rejected optimization:
   - low-level `mulmod`/`addmod` rewrite of ext4 `mul`; it regressed both the microbenchmark and end-to-end verifier gas, so the earlier `_mul_packed` path remains the reference implementation
   - single-buffer in-place Merkle frontier reduction; the attempted queue rewrite changed verification behavior on the success fixture and was reverted
   - fused `_foldOnce`; the measured end-to-end gain was too small to justify the added specialized code
   - fused eq-term multiply inside `_eqPolyEvalAt`; it changed the final constraint result and was reverted
   - batch sumcheck validation; validating all `polynomialEvals` once at entry regressed gas versus the current per-round validation placement and was reverted
+  - base-row scalar-aware first-fold rewrite; it regressed fixed-config verifier gas and was reverted
 - Measured fixed-config quartic verifier gas on the current 16-variable, 2-round fixture family:
   - baseline before this pass: `5,793,929`
   - after packed `_eqPolyEvalAt`: `4,938,693`
@@ -396,11 +401,39 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - after unchecked STIR/final-row loaders: `1,984,723`
   - after two-buffer Merkle frontier reuse: `1,940,646`
   - after corrected `_mulByEqTerm`: `1,932,953`
+  - after fixed 20-byte Merkle digest specialization: `1,893,047`
+  - after fused `_selectPolyEvalAt` accumulator loop: `1,886,378`
+  - after fused `_eqPolyEvalAt` accumulator loop: `1,883,228`
+  - after fixed-only no-copy initial eq path: `1,855,248`
 - Current steady-state measurements after the accepted Stage 4 pass:
-  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,932,953`
-  - direct verification transaction (`EOA -> WhirVerifier4.verify(...)`): `2,011,238`
-  - execution remainder after intrinsic gas and calldata gas: `1,777,546`
+  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,855,248`
+  - direct verification transaction (`EOA -> WhirVerifier4.verify(...)`): remeasure on the next unrestricted run; the previous directly measured value on the earlier revision was `2,011,238`
+  - execution remainder after intrinsic gas and calldata gas: remeasure together with the next direct transaction benchmark
   - calldata bytes for the current typed ABI entrypoint: `23,620`
+- Current STIR internal breakdown instrumentation (from `test/WhirGasProfile.t.sol`, same fixed 16-variable, 2-round fixture family):
+  - the profiler now splits each STIR call into `sampleQueries`, `leafHashing`, `merkleReduction`, `pow`, `rowFolding`, and residual `overhead`
+  - Round 0 (`9` queries, depth `18`, base rows): total `418,844`
+    - `sampleQueries`: `10,443`
+    - `leafHashing`: `39,302`
+    - `merkleReduction`: `168,415`
+    - `pow`: `18,487`
+    - `rowFolding`: `175,914`
+    - `overhead`: `6,283`
+  - Round 1 (`6` queries, depth `17`, ext4 rows): total `299,072`
+    - `sampleQueries`: `6,836`
+    - `leafHashing`: `43,643`
+    - `merkleReduction`: `111,931`
+    - `pow`: `11,590`
+    - `rowFolding`: `119,178`
+    - `overhead`: `5,894`
+  - Final STIR (`5` queries, depth `16`, ext4 rows): total `246,724`
+    - `sampleQueries`: `6,012`
+    - `leafHashing`: `36,223`
+    - `merkleReduction`: `91,274`
+    - `pow`: `8,988`
+    - `rowFolding`: `99,006`
+    - `overhead`: `5,221`
+  - These measurements replace earlier rough estimates. The remaining dominant STIR costs are row folding first and Merkle reduction second; query generation, pow, and residual overhead are materially smaller.
 
 ### Schedule Tuning Pass (after Stage 4, before Stage 5)
 

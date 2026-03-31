@@ -86,6 +86,131 @@ The Solidity verifier architecture supports both extension degrees from the star
 
 Changing Rust to `ConstantFromSecondRound` is a protocol-surface change: it changes the derived round schedule, WHIR Fiat-Shamir pattern, and fixed-config verifier constants. Do not change the folding-factor variant without following the schedule-tuning process in `./solidity_verifier_plan.md` and regenerating all affected fixtures/generated code.
 
+## Gas Profiling with Forge Flamegraphs
+
+### Overview
+
+Foundry supports:
+
+- `--flamegraph`: aggregated by function. This is usually the better first tool for optimization work because it answers "where does total gas go?"
+- `--flamechart`: chronological / call-tree ordered. Use this after the hotspot is known and you need to understand call structure or sequencing.
+
+Both generate SVGs in `./sol-spartan-whir/cache/`.
+
+### Foundry Bug: Large Test Crash
+
+In the current toolchain, both `--flamegraph` and `--flamechart` can crash with `capacity overflow` or `memory allocation of ... bytes failed` on deep verifier traces. The crash occurs _after_ the test passes, during trace decoding. This is a Foundry bug, not an OOM in verifier code.
+
+This is **not** a simple gas threshold. It is shape-dependent:
+
+- some `~1.5M` gas tests work (`testProfileStirBreakdown`)
+- some `~0.75M` gas tests still crash (`testFlameRound0Stir`)
+- the common factor is deep / complex decoded call trees, especially Merkle-heavy paths
+
+**Tests that crash:**
+
+- `testVerifyQuarticWhirSuccessFixture` (~1.9M gas)
+- `testProfileFullBreakdown` (~1.9M gas)
+- `testFlameRound0Stir`, `testFlameRound1Stir`, `testFlameFinalStir` (isolated STIR rounds with deep Merkle call trees)
+- `testFlameConstraintEvaluation` (~1.9M gas)
+
+**Tests that work:**
+
+- `testProfileStirBreakdown` (~1.5M gas) -- combined STIR profile, the largest stable flamegraph/flamechart target so far
+- `testFlameSyntheticEqConstraint` (~330k gas) -- eq constraint only
+- `testFlameSyntheticSelectConstraint` (~251k gas) -- select constraint only
+
+**Workaround:** Break profiling code into smaller focused tests. If a test crashes, it's too deep — split it or use a synthetic test with fewer queries/depth.
+
+**Practical advice:** Prefer `--flamegraph` first. In practice it has been more useful and at least as stable as `--flamechart` on the current hotspot tests.
+
+### Reading SVGs Programmatically
+
+Flamegraph SVGs are XML text. Do NOT try `view_image` — it rejects SVGs. Instead parse with:
+
+```bash
+python3 -c "
+import re
+with open('cache/flamegraph_WhirGasProfileTest_testProfileStirBreakdown.svg') as f:
+    content = f.read()
+entries = re.findall(r'<title>([^<]+)\(([0-9,]+) gas, ([0-9.]+)%\)</title>', content)
+parsed = [(name.strip(), int(gas.replace(',','')), float(pct)) for name, gas, pct in entries]
+parsed.sort(key=lambda x: -x[1])
+for name, gas, pct in parsed:
+    print(f'{gas:>10,}  {pct:>5.1f}%  {name}')
+"
+```
+
+This extracts every function with its cumulative gas and percentage, sorted by cost. Note that flamegraphs show the same function multiple times if it appears in different call stacks — aggregate manually if needed.
+
+Foundry writes useful `<title>` tags into both flamegraphs and flamecharts. They include function name, cumulative gas, and percentage. This makes scripted extraction viable even when viewing the SVG manually is inconvenient.
+
+### Profiling Infrastructure in `test/WhirGasProfile.t.sol`
+
+The file contains two contracts:
+
+- **`WhirProfileHarness`**: Deployed contract with `view` functions that replicate verifier logic with `gasleft()` instrumentation. Key functions:
+  - `profileFullBreakdown()` — returns `FullBreakdown` struct with gas for each verifier phase (setup, sumchecks, STIR rounds, constraints, final check). This is the canonical top-level breakdown.
+  - `profileStirBreakdowns()` — returns per-round `StirBreakdown` structs splitting STIR into: `sampleQueries`, `leafHashing`, `merkleReduction`, `pow`, `rowFolding`, `overhead`.
+  - `profileStirMicro()` — micro-benchmarks for atomic operations (hashLeafBaseSlice, compressNode, KoalaBear.pow, sampleStirQueries). Uses 100-iteration loops for stable measurements.
+  - Various `profileSynthetic*` functions for isolated constraint evaluation testing.
+
+- **`WhirGasProfileTest`**: Test contract that calls harness functions and logs results. Key tests:
+  - `testProfileFullBreakdown` — logs full verifier phase breakdown
+  - `testProfileStirBreakdown` — logs per-round STIR internals
+  - `testProfileStirMicro` — logs micro-benchmark results
+  - `testGasWhirVerifyFixed` — canonical single-number gas measurement
+
+### Interpreting Results
+
+**Key cost relationships (16-var, 2-round, foldingFactor=4 fixture):**
+
+| Component           | Gas     | Notes                                                                                                         |
+| ------------------- | ------- | ------------------------------------------------------------------------------------------------------------- |
+| Total verify        | ~1,933k | `testGasWhirVerifyFixed`                                                                                      |
+| STIR (all 3 rounds) | ~974k   | 50% of total. Split ~40/40/12/4/2/2 between rowFolding/merkleReduction/leafHashing/pow/sampleQueries/overhead |
+| Constraint eval     | ~297k   | 15% of total. eq-poly and select-poly evaluation                                                              |
+| Sumchecks (all 4)   | ~230k   | 12% of total. ~57k per sumcheck round                                                                         |
+| Setup               | ~84k    | observePattern + parseCommitment                                                                              |
+
+**Per-query STIR costs:**
+
+- Row folding: ~19.8k/query (15 `_foldOnce` × ~696 gas ext4 mul + overhead)
+- Merkle reduction: ~18.7k/query (depth×compressNode + index logic overhead)
+- Leaf hashing: 4.4k (base) or 7.2k (ext4) per query
+
+### Flamegraph vs `gasleft()` Profiling
+
+- **`gasleft()` profiling** (the `testProfile*` tests): Precise per-phase gas. Best for tracking optimization progress and measuring specific changes. Run with `forge test --match-test <name> -vv`.
+- **Flamegraph**: Shows function-level breakdown _within_ a phase. Best for finding unexpected costs (e.g., `_maskDigestTail` at 40k or `_clampEffectiveDigestBytes` at 17k — pure overhead discovered only via flamegraph). Use when you need to know _why_ a phase is expensive.
+- **Flamechart**: Shows the chronological call tree. Use when the hotspot is already known and you want to understand sequencing or caller/callee nesting.
+
+Always run `gasleft()` tests first to identify which phase to investigate, then flamegraph that phase (or the largest stable test covering it).
+
+### Minimize Profiling Noise
+
+Focused profiling targets are much better than full verifier traces.
+
+- Tests that call `_loadSuccessFixture()` include harness noise in the graph. On some focused tests this is still 5%–25% of total gas.
+- Prefer synthetic or harness-level tests that isolate one verifier phase.
+- If a profiling target is still too noisy, create a dedicated test that preloads data in `setUp()` or hardcodes the minimal inputs needed for that phase.
+- `testFlameSyntheticEqConstraint` and `testFlameSyntheticSelectConstraint` are currently the cleanest flamegraph targets for constraint work.
+- `testProfileStirBreakdown` is currently the best stable target for STIR analysis when the isolated STIR flamegraphs crash.
+
+### Optimization Validation Workflow
+
+1. Run `forge test` — all 58+ tests must pass
+2. Run `forge test --match-test testGasWhirVerifyFixed -vv` — get the single canonical gas number
+3. Run `forge test --match-test testProfileFullBreakdown -vv` — verify phase-level breakdown
+4. Compare against previous numbers to confirm the delta matches expectations
+
+### Warning: `via_ir` and Optimization Interactions
+
+The Solidity compiler with `via_ir = true` (used in this project) is aggressive about inlining and eliminating dead code. Many "obvious" optimizations yield much less than estimated because the compiler was already doing something similar. Always benchmark before and after — never trust gas estimates alone. Previous examples of surprises:
+
+- Low-level ext4 mul rewrite: expected -50k, actual **+208k** (compiler was already optimizing the high-level version better)
+- Batch sumcheck validation: expected -5k, actual **+4.7k** (extra memory allocation outweighed saved checks)
+
 ## Implementation Stages (Summary)
 
 See `./solidity_verifier_plan.md` for full details.

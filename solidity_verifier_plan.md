@@ -13,7 +13,7 @@ todos:
     status: completed
   - id: stage3
     content: "Stage 3: Merkle multiproof verification with domain-prefixed Keccak and digest masking"
-    status: pending
+    status: completed
   - id: stage4
     content: "Stage 4: Standalone WHIR verifier -- quartic passes first, then octic, with the main WHIR optimization pass"
     status: pending
@@ -363,6 +363,45 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - quartic and octic standalone WHIR both pass
   - the main standalone WHIR gas hotspots have been profiled and either optimized or explicitly deferred with a measured reason
 
+**Current quartic fixed-config results (31 March 2026):**
+
+- Accepted optimizations:
+  - packed `_eqPolyEvalAt` term construction (`1 + 2pq - p - q` without intermediate ext4 add/sub/fromBase calls)
+  - packed `_selectPolyEvalAt` term construction
+  - packed ext4 `add` / `sub`
+  - batched fixed Fiat-Shamir pattern observation (`observeBytes` over one precomputed byte string instead of many `observeBase` calls)
+  - dedicated ext4 `square`
+  - packed `observeExt4` absorption plus removal of redundant inner packed-ext4 validation in paths that are already batch-validated or Merkle-validated
+  - fused final-select multiply (`_selectPolyEvalAt` multiplies the accumulator by the select term without materializing an intermediate packed term)
+  - inline `sampleExt4` packing (sample four base elements directly into one packed ext4 value)
+  - unchecked row loaders in STIR/final-row evaluators, relying on prior batch validation or Merkle leaf validation instead of re-validating every row element during folding
+  - two-buffer Merkle frontier reuse in `_computeRootFromLeafHashes`, eliminating per-level frontier array allocation while preserving the existing deduplication behavior
+  - corrected `_mulByEqTerm` path in `_eqPolyEvalAt`, eliminating the intermediate packed eq term without changing the final constraint result
+- Rejected optimization:
+  - low-level `mulmod`/`addmod` rewrite of ext4 `mul`; it regressed both the microbenchmark and end-to-end verifier gas, so the earlier `_mul_packed` path remains the reference implementation
+  - single-buffer in-place Merkle frontier reduction; the attempted queue rewrite changed verification behavior on the success fixture and was reverted
+  - fused `_foldOnce`; the measured end-to-end gain was too small to justify the added specialized code
+  - fused eq-term multiply inside `_eqPolyEvalAt`; it changed the final constraint result and was reverted
+  - batch sumcheck validation; validating all `polynomialEvals` once at entry regressed gas versus the current per-round validation placement and was reverted
+- Measured fixed-config quartic verifier gas on the current 16-variable, 2-round fixture family:
+  - baseline before this pass: `5,793,929`
+  - after packed `_eqPolyEvalAt`: `4,938,693`
+  - after packed `_selectPolyEvalAt`: `4,293,271`
+  - after packed ext4 `add` / `sub`: `2,508,365`
+  - after batched fixed-pattern observation: `2,493,343`
+  - after dedicated ext4 `square`: `2,484,127`
+  - after packed `observeExt4` + validation elision: `2,147,564`
+  - after fused final-select multiply: `2,012,019`
+  - after inline `sampleExt4` packing: `1,993,480`
+  - after unchecked STIR/final-row loaders: `1,984,723`
+  - after two-buffer Merkle frontier reuse: `1,940,646`
+  - after corrected `_mulByEqTerm`: `1,932,953`
+- Current steady-state measurements after the accepted Stage 4 pass:
+  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,932,953`
+  - direct verification transaction (`EOA -> WhirVerifier4.verify(...)`): `2,011,238`
+  - execution remainder after intrinsic gas and calldata gas: `1,777,546`
+  - calldata bytes for the current typed ABI entrypoint: `23,620`
+
 ### Schedule Tuning Pass (after Stage 4, before Stage 5)
 
 The verifier remains generated from Rust-derived schedule constants. This pass decides which schedule is frozen into the remaining fixtures, benchmarks, and generated fixed-config wrappers after we already have a working standalone WHIR verifier and first gas numbers.
@@ -550,6 +589,7 @@ graph TD
 
 - Use Foundry's `vm.startSnapshotGas` / `vm.stopSnapshotGas` around the verifier call.
 - Report per benchmark: **execution gas**, **calldata size in bytes**, **calldata gas cost estimate**, **total estimated transaction cost**.
+- Also keep one direct transaction benchmark for the fixed verifier using a broadcast script against a local Anvil node, so we track the actual user-paid `EOA -> verify(...)` transaction gas in addition to the in-test call-path benchmark.
 - Separate benchmark families: quartic standalone WHIR, octic standalone WHIR, quartic full Spartan, octic full Spartan.
 - Use fixed Rust-generated benchmark fixtures so all gas comparisons use identical inputs.
 - Track typed-ABI and blob-wrapper results separately once both entry points exist.

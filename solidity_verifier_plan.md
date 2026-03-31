@@ -381,6 +381,9 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - fused `_selectPolyEvalAt` accumulator loop (keep unpacked accumulator coefficients across the whole variable loop instead of re-unpacking per term)
   - fused `_eqPolyEvalAt` accumulator loop (same strategy while preserving the existing `p * q` computation)
   - fixed-only no-copy initial eq path in `WhirVerifier4` (remove `_statementFromCalldata` / `_concatenateEq` from the success path and treat user statement points plus OOD points as two logical segments)
+  - direct packed-ext4 range checks in `validatePackedExt4` (remove `unpack()` memory allocation from verifier ingress and sumcheck validation)
+  - dim-4 STIR row-fold specialization that pre-unpacks the four folding-randomness extension elements once per row and reuses their coefficients across all 15 folds
+  - batched ext4 transcript absorption for contiguous fixed-path observations (`observePackedExt4Pair` in sumchecks and `observePackedExt4Slice` for `finalPoly`)
 - Rejected optimization:
   - low-level `mulmod`/`addmod` rewrite of ext4 `mul`; it regressed both the microbenchmark and end-to-end verifier gas, so the earlier `_mul_packed` path remains the reference implementation
   - single-buffer in-place Merkle frontier reduction; the attempted queue rewrite changed verification behavior on the success fixture and was reverted
@@ -388,6 +391,7 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - fused eq-term multiply inside `_eqPolyEvalAt`; it changed the final constraint result and was reverted
   - batch sumcheck validation; validating all `polynomialEvals` once at entry regressed gas versus the current per-round validation placement and was reverted
   - base-row scalar-aware first-fold rewrite; it regressed fixed-config verifier gas and was reverted
+  - queue-style absolute-index Merkle reducer adapted from `sol-whir`; it under-consumed decommitments on the real WHIR query batches and was reverted after parity failed on the fixed verifier path
 - Measured fixed-config quartic verifier gas on the current 16-variable, 2-round fixture family:
   - baseline before this pass: `5,793,929`
   - after packed `_eqPolyEvalAt`: `4,938,693`
@@ -405,35 +409,59 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - after fused `_selectPolyEvalAt` accumulator loop: `1,886,378`
   - after fused `_eqPolyEvalAt` accumulator loop: `1,883,228`
   - after fixed-only no-copy initial eq path: `1,855,248`
+  - after direct packed-ext4 range checks: `1,808,233`
+  - after dim-4 row-fold specialization with pre-unpacked randomness: `1,755,730`
+  - after batched ext4 transcript absorption: `1,745,325`
+  - after assembly `_computeRootFromLeafHashes20` Merkle reduction: `1,576,832`
+  - after fused assembly `_computeEqTerm` and `_selectPolyEvalAt`: `1,515,492`
+  - after assembly `_foldOnceWithCoeffs` with pre-unpacked coefficients: `1,406,327`
+  - after assembly `_extrapolate_012_fast` eliminating 5 memory allocations: `1,329,599`
+  - after assembly pointer loads in `_eqPolyEvalAt` + struct field preloading: `1,318,285`
+  - after Horner `_combineInitialConstraintEvals` (backward iteration, 1 mul/iter): `1,316,801`
+  - after removing redundant `validatePackedExt4` on proof data and memory values: `1,298,308`
+- Accepted optimizations (continued):
+  - assembly `_computeRootFromLeafHashes20`: interleaved (index, hash) buffers, inline keccak with cached scratch pointer, raw pointer arithmetic eliminating bounds checks and `compressNode20` calls
+  - fused assembly `_computeEqTerm`: computes `1 + 2pq - p - q` per-lane in a single assembly block
+  - full assembly `_selectPolyEvalAt`: all variable-loop arithmetic in assembly, branchless field subtraction
+  - assembly `_foldOnceWithCoeffs`: pre-unpacked r coefficients passed as separate args, avoiding repeated unpacking across 15 folds per query
+  - assembly `_extrapolate_012_fast`: 4 unrolled lanes computing q1/q2 coefficients inline, eliminating 5 memory array allocations (c0, c1, c2, q1, q2)
+  - assembly pointer loads in `_eqPolyEvalAt`/`_eqPolyEvalAtCalldata`: precomputed base pointers replacing bounds-checked array access
+  - struct field preloading in `_evaluateConstraint`/`_combineConstraintEvals`: avoiding repeated nested memory dereferences
+  - Horner scheme in `_combineInitialConstraintEvals`: backward iteration halving ext4 muls per iteration
+  - assembly `KoalaBear.pow`: inline assembly `mulmod` loop
+  - redundant `validatePackedExt4` removal: proof values observed into transcript (non-canonical → different Keccak → rejection) and memory values from challenger samples (inherently canonical) no longer validated; public statement input validation retained
+- Rejected optimizations (continued):
+  - Horner scheme in `_evaluateConstraint`, `_combineConstraintEvals`, `_evaluateInitialConstraint`: all three caused `stack-too-deep` because the reversed loop adds one extra live variable beyond the 16-slot Yul stack limit when `_eqPolyEvalAt` is inlined
+  - low-level assembly rewrite of `_mul_packed`: +208k gas regression (compiler optimizes the Solidity version better)
 - Current steady-state measurements after the accepted Stage 4 pass:
-  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,855,248`
+  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,298,308`
   - direct verification transaction (`EOA -> WhirVerifier4.verify(...)`): remeasure on the next unrestricted run; the previous directly measured value on the earlier revision was `2,011,238`
   - execution remainder after intrinsic gas and calldata gas: remeasure together with the next direct transaction benchmark
   - calldata bytes for the current typed ABI entrypoint: `23,620`
 - Current STIR internal breakdown instrumentation (from `test/WhirGasProfile.t.sol`, same fixed 16-variable, 2-round fixture family):
   - the profiler now splits each STIR call into `sampleQueries`, `leafHashing`, `merkleReduction`, `pow`, `rowFolding`, and residual `overhead`
-  - Round 0 (`9` queries, depth `18`, base rows): total `418,844`
-    - `sampleQueries`: `10,443`
-    - `leafHashing`: `39,302`
-    - `merkleReduction`: `168,415`
+  - Round 0 (`9` queries, depth `18`, base rows): total `355,561`
+    - `sampleQueries`: `10,438`
+    - `leafHashing`: `43,836`
+    - `merkleReduction`: `168,159`
     - `pow`: `18,487`
-    - `rowFolding`: `175,914`
-    - `overhead`: `6,283`
-  - Round 1 (`6` queries, depth `17`, ext4 rows): total `299,072`
-    - `sampleQueries`: `6,836`
-    - `leafHashing`: `43,643`
-    - `merkleReduction`: `111,931`
+    - `rowFolding`: `108,360`
+    - `overhead`: `6,281`
+  - Round 1 (`6` queries, depth `17`, ext4 rows): total `252,395`
+    - `sampleQueries`: `6,830`
+    - `leafHashing`: `43,349`
+    - `merkleReduction`: `113,183`
     - `pow`: `11,590`
-    - `rowFolding`: `119,178`
-    - `overhead`: `5,894`
-  - Final STIR (`5` queries, depth `16`, ext4 rows): total `246,724`
-    - `sampleQueries`: `6,012`
-    - `leafHashing`: `36,223`
-    - `merkleReduction`: `91,274`
+    - `rowFolding`: `71,700`
+    - `overhead`: `5,743`
+  - Final STIR (`5` queries, depth `16`, ext4 rows): total `206,901`
+    - `sampleQueries`: `6,000`
+    - `leafHashing`: `36,133`
+    - `merkleReduction`: `90,974`
     - `pow`: `8,988`
-    - `rowFolding`: `99,006`
-    - `overhead`: `5,221`
-  - These measurements replace earlier rough estimates. The remaining dominant STIR costs are row folding first and Merkle reduction second; query generation, pow, and residual overhead are materially smaller.
+    - `rowFolding`: `59,615`
+    - `overhead`: `5,191`
+  - These measurements replace earlier rough estimates. The remaining dominant STIR costs are merkleReduction first and rowFolding second (both already assembly-optimized); query generation, pow, and residual overhead are materially smaller.
 
 ### Schedule Tuning Pass (after Stage 4, before Stage 5)
 

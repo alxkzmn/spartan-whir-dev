@@ -165,19 +165,19 @@ The file contains two contracts:
 
 **Key cost relationships (16-var, 2-round, foldingFactor=4 fixture):**
 
-| Component           | Gas     | Notes                                                                                                         |
-| ------------------- | ------- | ------------------------------------------------------------------------------------------------------------- |
-| Total verify        | ~1,933k | `testGasWhirVerifyFixed`                                                                                      |
-| STIR (all 3 rounds) | ~974k   | 50% of total. Split ~40/40/12/4/2/2 between rowFolding/merkleReduction/leafHashing/pow/sampleQueries/overhead |
-| Constraint eval     | ~297k   | 15% of total. eq-poly and select-poly evaluation                                                              |
-| Sumchecks (all 4)   | ~230k   | 12% of total. ~57k per sumcheck round                                                                         |
-| Setup               | ~84k    | observePattern + parseCommitment                                                                              |
+| Component           | Gas     | Notes                                                                                       |
+| ------------------- | ------- | ------------------------------------------------------------------------------------------- |
+| Total verify        | ~1,298k | `testGasWhirVerifyFixed`                                                                    |
+| STIR (all 3 rounds) | ~627k   | 48% of total. Dominated by rowFolding and merkleReduction (both already assembly-optimized) |
+| Constraint eval     | ~219k   | 17% of total. eq-poly and select-poly evaluation                                            |
+| Sumchecks (all 4)   | ~124k   | 10% of total. ~31k per sumcheck round                                                       |
+| Setup               | ~71k    | observePattern + parseCommitment                                                            |
 
 **Per-query STIR costs:**
 
-- Row folding: ~19.8k/query (15 `_foldOnce` × ~696 gas ext4 mul + overhead)
-- Merkle reduction: ~18.7k/query (depth×compressNode + index logic overhead)
-- Leaf hashing: 4.4k (base) or 7.2k (ext4) per query
+- Row folding: ~19.8k/query (15 `_foldOnce` × ~696 gas ext4 mul + overhead) — already assembly-optimized
+- Merkle reduction: ~18.7k/query (depth×compressNode + index logic overhead) — already assembly-optimized
+- Leaf hashing: 4.4k (base) or 7.2k (ext4) per query — already assembly-optimized
 
 ### Flamegraph vs `gasleft()` Profiling
 
@@ -199,7 +199,7 @@ Focused profiling targets are much better than full verifier traces.
 
 ### Optimization Validation Workflow
 
-1. Run `forge test` — all 58+ tests must pass
+1. Run `forge test` — all 65 tests must pass
 2. Run `forge test --match-test testGasWhirVerifyFixed -vv` — get the single canonical gas number
 3. Run `forge test --match-test testProfileFullBreakdown -vv` — verify phase-level breakdown
 4. Compare against previous numbers to confirm the delta matches expectations

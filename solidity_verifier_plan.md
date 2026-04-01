@@ -420,6 +420,11 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - after Horner `_combineInitialConstraintEvals` (backward iteration, 1 mul/iter): `1,316,801`
   - after removing redundant `validatePackedExt4` on proof data and memory values: `1,298,308`
   - after restoring `validatePackedExt4Calldata` for `statement.points` in fixed verifier path: `1,304,440`
+  - after specializing challenger `_flush` for the already-allocated verifier buffer: `1,303,068`
+  - after removing the dead byte-by-byte fallback from `_sampleUint32`: `1,288,031`
+  - after Horner `_combineConstraintEvals` (reverse-order accumulation, 1 mul/term): `1,279,916`
+  - after base-field specialized `_foldOnceBase` (4 muls instead of 16 for first fold layer in Round 0): `1,249,946`
+  - after Horner `_evaluateConstraint` with fused assembly mulAdd + optimizer_runs 200→833: `1,228,312`
 - Accepted optimizations (continued):
   - assembly `_computeRootFromLeafHashes20`: interleaved (index, hash) buffers, inline keccak with cached scratch pointer, raw pointer arithmetic eliminating bounds checks and `compressNode20` calls
   - fused assembly `_computeEqTerm`: computes `1 + 2pq - p - q` per-lane in a single assembly block
@@ -433,37 +438,51 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - redundant `validatePackedExt4` removal: proof values observed into transcript (non-canonical → different Keccak → rejection) and memory values from challenger samples (inherently canonical) no longer validated; public statement input validation retained
   - restored `validatePackedExt4Calldata(statement.points[i])` in `_evaluateInitialConstraint`: the fixed verifier path bypassed `_concatenateEq` where validation existed, leaving public-input points unchecked
   - corrected 3 hardcoded `bytes4` error selectors in assembly `_computeRootFromLeafHashes20` (`InsufficientDecommitments` 0x90196ee3, `TrailingDecommitments` 0xb48ec3d2, `InvalidFinalLayer` 0x1d729656)
+  - challenger `_flush` specialization: skip `_ensureCapacity` on the hot path where the transcript buffer already exists; allocate only on the degenerate empty-buffer path
+  - simplified `_sampleUint32`: the verifier only consumes 4-byte chunks, so the `outputIndex < 4` byte-by-byte fallback was dead and could be removed
+  - Horner `_combineConstraintEvals`: reverse-order accumulation across eq/select evaluations, reducing ext4 mul count from `2n` to `n`
+  - base-field specialized `_foldOnceBase`: when both fold inputs are base-field values (Round 0 first layer), d = (d0,0,0,0) so the ext4 schoolbook r\*d reduces from 16 muls to 4; saved `29,970` gas (`108,414` → `78,444` in Round 0 rowFolding)
+  - Horner `_evaluateConstraint`: converted from explicit gamma-power tracking (`total += γ^k × w_k; γ^k *= challenge`) to Horner form (`total = total × challenge + w_k`, reverse iteration), eliminating one ext4 mul per weight evaluation (22 weights across 2 round constraints)
+  - fused assembly mulAdd in `_evaluateConstraint` Horner step: inline assembly block pre-unpacks challenge lanes once, then does schoolbook ext4 mul+add in a single block without intermediate packing/unpacking
+  - optimizer_runs raised from 200 to 833 (max before WhirVerifier4 bytecode exceeds EIP-170 24,576-byte limit; at 834 bytecode is 24,637)
 - Rejected optimizations (continued):
   - Horner scheme in `_evaluateConstraint`, `_combineConstraintEvals`, `_evaluateInitialConstraint`: all three caused `stack-too-deep` because the reversed loop adds one extra live variable beyond the 16-slot Yul stack limit when `_eqPolyEvalAt` is inlined
   - low-level assembly rewrite of `_mul_packed`: +208k gas regression (compiler optimizes the Solidity version better)
+  - small-array insertion-sort path in `sampleStirQueries`: regressed verifier gas to `1,296,787` and increased `sampleStirQueries(9)+init` from `12,165` to `20,412`; reverted in favor of `LibSort`
+  - full-assembly `_eqPolyEvalAt`: converting the entire function to inline assembly caused +31,801 gas regression; via_ir optimizer handles the Solidity-level loop better for hot inner loops
+  - Horner `_evaluateInitialConstraint` with fused assembly mulAdd: saved only 77 gas but required dropping optimizer_runs from 833 to 600 (bytecode pressure); net benefit negligible, reverted
 - Current steady-state measurements after the accepted Stage 4 pass:
-  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,304,440`
-  - direct verification transaction (`EOA -> WhirVerifier4.verify(...)`): remeasure on the next unrestricted run; the previous directly measured value on the earlier revision was `2,011,238`
-  - execution remainder after intrinsic gas and calldata gas: remeasure together with the next direct transaction benchmark
+  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,228,312`
+  - direct verification transaction (`EOA -> VerifyWrapper -> WhirVerifier4.verify(...)` via Anvil): `1,367,920` total tx gas (execution `1,094,539` + calldata/intrinsic `273,381`)
   - calldata bytes for the current typed ABI entrypoint: `23,620`
+  - **Cross-verifier comparison** (sol-spartan-whir WHIR-only vs sol-whir BN254, same 80-bit security / ff4 / 16-var):
+    - sol-spartan-whir: execution `1,094,539`, total tx `1,367,920`, calldata+intrinsic `273,381`
+    - sol-whir: execution `677,011`, total tx `1,135,052`, calldata+intrinsic `458,041`
+    - sol-spartan-whir has ~62% higher execution gas but only ~21% higher total tx gas due to smaller field elements reducing calldata cost
+  - **Tx gas measurement methodology**: deploy wrapper contract storing `verify()` result in state; `forge script --broadcast` against local Anvil; read `gasUsed` from `broadcast/.../run-latest.json`. Scripts: `sol-spartan-whir/script/MeasureTxGas.s.sol`, `sol-whir/script/Verify.s.sol`.
 - Current STIR internal breakdown instrumentation (from `test/WhirGasProfile.t.sol`, same fixed 16-variable, 2-round fixture family):
   - the profiler now splits each STIR call into `sampleQueries`, `leafHashing`, `merkleReduction`, `pow`, `rowFolding`, and residual `overhead`
-  - Round 0 (`9` queries, depth `18`, base rows): total `355,561`
-    - `sampleQueries`: `10,438`
-    - `leafHashing`: `43,836`
-    - `merkleReduction`: `168,159`
+  - Round 0 (`9` queries, depth `18`, base rows): total `319,606`
+    - `sampleQueries`: `9,801`
+    - `leafHashing`: `39,176`
+    - `merkleReduction`: `168,229`
     - `pow`: `18,487`
-    - `rowFolding`: `108,360`
-    - `overhead`: `6,281`
-  - Round 1 (`6` queries, depth `17`, ext4 rows): total `252,395`
-    - `sampleQueries`: `6,830`
-    - `leafHashing`: `43,349`
-    - `merkleReduction`: `113,183`
+    - `rowFolding`: `78,336`
+    - `overhead`: `5,577`
+  - Round 1 (`6` queries, depth `17`, ext4 rows): total `250,571`
+    - `sampleQueries`: `6,774`
+    - `leafHashing`: `43,508`
+    - `merkleReduction`: `111,739`
     - `pow`: `11,590`
-    - `rowFolding`: `71,700`
-    - `overhead`: `5,743`
-  - Final STIR (`5` queries, depth `16`, ext4 rows): total `206,901`
-    - `sampleQueries`: `6,000`
-    - `leafHashing`: `36,133`
-    - `merkleReduction`: `90,974`
+    - `rowFolding`: `71,772`
+    - `overhead`: `5,188`
+  - Final STIR (`5` queries, depth `16`, ext4 rows): total `206,150`
+    - `sampleQueries`: `5,950`
+    - `leafHashing`: `36,080`
+    - `merkleReduction`: `91,067`
     - `pow`: `8,988`
-    - `rowFolding`: `59,615`
-    - `overhead`: `5,191`
+    - `rowFolding`: `59,555`
+    - `overhead`: `4,510`
   - These measurements replace earlier rough estimates. The remaining dominant STIR costs are merkleReduction first and rowFolding second (both already assembly-optimized); query generation, pow, and residual overhead are materially smaller.
 
 ### Schedule Tuning Pass (after Stage 4, before Stage 5)

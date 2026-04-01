@@ -211,6 +211,26 @@ The Solidity compiler with `via_ir = true` (used in this project) is aggressive 
 - Low-level ext4 mul rewrite: expected -50k, actual **+208k** (compiler was already optimizing the high-level version better)
 - Batch sumcheck validation: expected -5k, actual **+4.7k** (extra memory allocation outweighed saved checks)
 
+### Cross-Verifier Gas Comparison (sol-spartan-whir vs sol-whir)
+
+Both verifiers: 80-bit security, `foldingFactor = 4`, `numVariables = 16`.
+
+| Metric               | sol-spartan-whir (WHIR-only) | sol-whir (BN254) |
+| -------------------- | ---------------------------- | ---------------- |
+| Execution gas        | 1,094,539                    | 677,011          |
+| Total tx gas         | 1,367,920                    | 1,135,052        |
+| Calldata + intrinsic | 273,381                      | 458,041          |
+
+sol-spartan-whir has higher execution gas (~62%) but only ~21% higher total tx gas because smaller field elements yield less calldata.
+
+**How to measure total tx gas:**
+
+1. Deploy a wrapper contract that stores the `verify()` result in state (making it state-changing).
+2. Run `forge script` against a local `anvil` instance with `--broadcast`.
+3. Read `gasUsed` from `broadcast/<ScriptName>.s.sol/31337/run-latest.json`.
+
+Scripts: `sol-spartan-whir/script/MeasureTxGas.s.sol`, `sol-whir/script/Verify.s.sol`.
+
 ## Implementation Stages (Summary)
 
 See `./solidity_verifier_plan.md` for full details.

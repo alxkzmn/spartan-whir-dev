@@ -223,8 +223,6 @@ Both verifiers: 80-bit security, `foldingFactor = 4`, `numVariables = 16`.
 
 sol-spartan-whir has higher execution gas (~62%) but only ~21% higher total tx gas because smaller field elements yield less calldata.
 
-**Note:** These sol-spartan-whir numbers are stale (measured before the latest optimizations; current `testGasWhirVerifyFixed` is `1,199,228`). Rerun tx gas measurement to update.
-
 **How to measure total tx gas:**
 
 1. Deploy a wrapper contract that stores the `verify()` result in state (making it state-changing).

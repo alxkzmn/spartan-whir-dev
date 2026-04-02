@@ -167,17 +167,17 @@ The file contains two contracts:
 
 | Component           | Gas     | Notes                                                                                       |
 | ------------------- | ------- | ------------------------------------------------------------------------------------------- |
-| Total verify        | ~1,304k | `testGasWhirVerifyFixed`                                                                    |
-| STIR (all 3 rounds) | ~627k   | 48% of total. Dominated by rowFolding and merkleReduction (both already assembly-optimized) |
-| Constraint eval     | ~219k   | 17% of total. eq-poly and select-poly evaluation                                            |
-| Sumchecks (all 4)   | ~124k   | 10% of total. ~31k per sumcheck round                                                       |
-| Setup               | ~71k    | observePattern + parseCommitment                                                            |
+| Total verify        | ~1,199k | `testGasWhirVerifyFixed`                                                                    |
+| STIR (all 3 rounds) | ~575k   | 48% of total. Dominated by merkleReduction and rowFolding (both already assembly-optimized) |
+| Constraint eval     | ~191k   | 16% of total. eq-poly and select-poly evaluation                                            |
+| Sumchecks (all 4)   | ~112k   | 9% of total. ~27-31k per sumcheck round                                                     |
+| Setup               | ~67k    | observePattern + parseCommitment                                                            |
 
 **Per-query STIR costs:**
 
-- Row folding: ~19.8k/query (15 `_foldOnce` × ~696 gas ext4 mul + overhead) — already assembly-optimized
-- Merkle reduction: ~18.7k/query (depth×compressNode + index logic overhead) — already assembly-optimized
-- Leaf hashing: 4.4k (base) or 7.2k (ext4) per query — already assembly-optimized
+- Row folding: ~10.8-13.5k/query (fold schedule varies by round) — already assembly-optimized
+- Merkle reduction: ~18.2-18.7k/query (depth×compressNode + index logic overhead) — already assembly-optimized
+- Leaf hashing: 4.9k (base) or 7.2k (ext4) per query — already assembly-optimized
 
 ### Flamegraph vs `gasleft()` Profiling
 
@@ -199,7 +199,7 @@ Focused profiling targets are much better than full verifier traces.
 
 ### Optimization Validation Workflow
 
-1. Run `forge test` — all 65 tests must pass
+1. Run `forge test` — all 69 tests must pass
 2. Run `forge test --match-test testGasWhirVerifyFixed -vv` — get the single canonical gas number
 3. Run `forge test --match-test testProfileFullBreakdown -vv` — verify phase-level breakdown
 4. Compare against previous numbers to confirm the delta matches expectations
@@ -222,6 +222,8 @@ Both verifiers: 80-bit security, `foldingFactor = 4`, `numVariables = 16`.
 | Calldata + intrinsic | 273,381                      | 458,041          |
 
 sol-spartan-whir has higher execution gas (~62%) but only ~21% higher total tx gas because smaller field elements yield less calldata.
+
+**Note:** These sol-spartan-whir numbers are stale (measured before the latest optimizations; current `testGasWhirVerifyFixed` is `1,199,228`). Rerun tx gas measurement to update.
 
 **How to measure total tx gas:**
 

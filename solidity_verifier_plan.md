@@ -431,6 +431,8 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - after inlined sorted-unique check into `_computeRootFromLeafHashes20` copy loop: `1,115,949`
   - after full assembly `_eqPolyEvalAt` + `_eqPolyEvalAtCalldata` (inlined `_computeEqTerm` + accumulation mul): `1,103,879`
   - after full assembly `_eqPolyEvalAtCalldata` (matching `_eqPolyEvalAt` pattern for calldata variant): `1,101,671`
+  - after full-width packed `add`/`sub` in `KoalaBearExt4` (single 256-bit op + per-lane reduce): `1,097,121`
+  - after Horner `_evaluateInitialConstraint` + Merkle pointer advancement + dedup tracking: `1,092,539`
 - Accepted optimizations (continued):
   - assembly `_computeRootFromLeafHashes20`: interleaved (index, hash) buffers, inline keccak with cached scratch pointer, raw pointer arithmetic eliminating bounds checks and `compressNode20` calls
   - fused assembly `_computeEqTerm`: computes `1 + 2pq - p - q` per-lane in a single assembly block
@@ -458,6 +460,10 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - fused leaf hash validation+packing in `hashLeafBaseSlice20` and `hashLeafExtensionSlice20`: merged the Solidity range-check loop into the assembly packing loop, removed free pointer bump
   - inlined sorted-unique check into `_computeRootFromLeafHashes20` copy loop: eliminated separate `_assertSortedUnique` pass over query indices
   - full assembly `_eqPolyEvalAt` and `_eqPolyEvalAtCalldata`: inlined `_computeEqTerm` eq-term computation + accumulation mul into single `assembly ("memory-safe")` block, replacing the prior Solidity loop that the via_ir optimizer handled well only for the memory variant
+  - full-width packed `KoalaBearExt4.add`: single `add(a, b)` then per-lane extract+reduce, replacing 8-variable unpack; sound because max lane sum = 2×(p−1) < 2^32 (no inter-lane carry)
+  - full-width packed `KoalaBearExt4.sub`: single `a + packed_p − b` then per-lane extract+reduce, replacing per-lane `mul(modulus, lt(...))` branchless borrow; sound because each lane of `a + p` exceeds max `b_i` (no inter-lane borrow)
+  - Horner `_evaluateInitialConstraint`: reversed loop order (OOD points first, then statement points), `total = weight + total × challenge` instead of `total += γ^k × weight; γ^k *= challenge`, saving one ext4 mul per point; previous attempt was rejected for bytecode pressure, but combined with add/sub shrinking bytecode, now fits at optimizer_runs=645
+  - Merkle `_computeRootFromLeafHashes20` pointer advancement: `idxPtr`/`hashPtr` advance by 0x20 instead of recomputing `shl(5, i)` offset; `decommPtr`/`decommEnd` replace counter-based `decommCursor`; `hasLastParent`/`lastParentIndex` replace re-reading last entry for dedup check
 - Rejected optimizations (continued):
   - Horner scheme in `_evaluateConstraint`, `_combineConstraintEvals`, `_evaluateInitialConstraint`: all three caused `stack-too-deep` because the reversed loop adds one extra live variable beyond the 16-slot Yul stack limit when `_eqPolyEvalAt` is inlined
   - low-level assembly rewrite of `_mul_packed`: +208k gas regression (compiler optimizes the Solidity version better)
@@ -469,14 +475,14 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - fixed-arity eq specialization (`16`/`12`/`8` variable kernels for initial + round constraints): regressed verifier gas from `1,218,367` to `1,219,238`; reverted while keeping the select-only specialization
   - direct packed-ext4 challenger sampler (`samplePackedExt4` replacing 4× `sampleBase`): preserved transcript parity but regressed verifier gas from `1,193,931` to `1,200,031`; reverted
 - Current steady-state measurements after the accepted Stage 4 pass:
-  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,101,671` (at optimizer_runs=645)
-  - direct verification transaction (`EOA -> WhirVerifier4.verify(...)` via Anvil): `1,181,292` total tx gas (execution `947,600` + calldata/intrinsic `233,692`)
-  - wrapper verification transaction (`EOA -> VerifyWrapper -> WhirVerifier4.verify(...)` via Anvil): `1,220,726` total tx gas (execution `986,666` + calldata/intrinsic `234,060`, wrapper overhead `39,066`)
+  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,092,539` (at optimizer_runs=645, bytecode `24,334` bytes)
+  - direct verification transaction (`EOA -> WhirVerifier4.verify(...)` via Anvil): `1,172,160` total tx gas (execution `938,468` + calldata/intrinsic `233,692`)
+  - wrapper verification transaction (`EOA -> VerifyWrapper -> WhirVerifier4.verify(...)` via Anvil): `1,211,594` total tx gas (execution `977,534` + calldata/intrinsic `234,060`, wrapper overhead `39,434`)
   - calldata bytes for the current typed ABI entrypoint: `23,620`
   - **Cross-verifier comparison** (sol-spartan-whir WHIR-only vs sol-whir BN254, same 80-bit security / ff4 / 16-var):
-    - sol-spartan-whir: execution `986,666` (wrapper), total tx `1,220,726`, calldata+intrinsic `234,060`
+    - sol-spartan-whir: execution `977,534` (wrapper), total tx `1,211,594`, calldata+intrinsic `234,060`
     - sol-whir: execution `699,176` (wrapper), total tx `1,135,052`, calldata+intrinsic `435,876`
-    - sol-spartan-whir has ~41% higher execution gas but only ~7.5% higher total tx gas due to smaller field elements reducing calldata cost
+    - sol-spartan-whir has ~40% higher execution gas but only ~6.7% higher total tx gas due to smaller field elements reducing calldata cost
   - **Tx gas measurement methodology**: deploy wrapper contract storing `verify()` result in state; `forge script --broadcast` against local Anvil; read `gasUsed` from `broadcast/.../run-latest.json`. Scripts: `sol-spartan-whir/script/MeasureTxGas.s.sol`, `sol-whir/script/Verify.s.sol`.
 - Current STIR internal breakdown instrumentation (from `test/WhirGasProfile.t.sol`, same fixed 16-variable, 2-round fixture family):
   - the profiler now splits each STIR call into `sampleQueries`, `leafHashing`, `merkleReduction`, `pow`, `rowFolding`, and residual `overhead`

@@ -217,11 +217,11 @@ Both verifiers: 80-bit security, `foldingFactor = 4`, `numVariables = 16`.
 
 | Metric               | sol-spartan-whir (WHIR-only) | sol-whir (BN254) |
 | -------------------- | ---------------------------- | ---------------- |
-| Execution gas        | 1,101,671                    | 677,011          |
-| Total tx gas         | 1,220,726                    | 1,135,052        |
+| Execution gas        | 1,092,539                    | 677,011          |
+| Total tx gas         | 1,211,594                    | 1,135,052        |
 | Calldata + intrinsic | 234,060                      | 435,876          |
 
-sol-spartan-whir has higher execution gas (~63%) but only ~7.5% higher total tx gas because smaller field elements yield less calldata.
+sol-spartan-whir has higher execution gas (~61%) but only ~6.7% higher total tx gas because smaller field elements yield less calldata.
 
 **How to measure total tx gas:**
 

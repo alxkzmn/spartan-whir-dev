@@ -167,10 +167,10 @@ The file contains two contracts:
 
 | Component           | Gas     | Notes                                                                                       |
 | ------------------- | ------- | ------------------------------------------------------------------------------------------- |
-| Total verify        | ~1,199k | `testGasWhirVerifyFixed`                                                                    |
-| STIR (all 3 rounds) | ~575k   | 48% of total. Dominated by merkleReduction and rowFolding (both already assembly-optimized) |
-| Constraint eval     | ~191k   | 16% of total. eq-poly and select-poly evaluation                                            |
-| Sumchecks (all 4)   | ~112k   | 9% of total. ~27-31k per sumcheck round                                                     |
+| Total verify        | ~1,054k | `testGasWhirVerifyFixed`                                                                    |
+| STIR (all 3 rounds) | ~474k   | 45% of total. Dominated by merkleReduction and rowFolding (both already assembly-optimized) |
+| Constraint eval     | ~181k   | 17% of total. eq-poly and select-poly evaluation                                            |
+| Sumchecks           | ~47k    | 4% of total. final select + final sumcheck                                                  |
 | Setup               | ~67k    | observePattern + parseCommitment                                                            |
 
 **Per-query STIR costs:**
@@ -217,11 +217,11 @@ Both verifiers: 80-bit security, `foldingFactor = 4`, `numVariables = 16`.
 
 | Metric               | sol-spartan-whir (WHIR-only) | sol-whir (BN254) |
 | -------------------- | ---------------------------- | ---------------- |
-| Execution gas        | 1,092,539                    | 677,011          |
-| Total tx gas         | 1,211,594                    | 1,135,052        |
+| Execution gas        | 1,054,301                    | 677,011          |
+| Total tx gas         | 1,172,266                    | 1,135,052        |
 | Calldata + intrinsic | 234,060                      | 435,876          |
 
-sol-spartan-whir has higher execution gas (~61%) but only ~6.7% higher total tx gas because smaller field elements yield less calldata.
+sol-spartan-whir has higher execution gas (~56%) but only ~3.3% higher total tx gas because smaller field elements yield less calldata.
 
 **How to measure total tx gas:**
 

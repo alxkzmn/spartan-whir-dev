@@ -433,6 +433,11 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - after full assembly `_eqPolyEvalAtCalldata` (matching `_eqPolyEvalAt` pattern for calldata variant): `1,101,671`
   - after full-width packed `add`/`sub` in `KoalaBearExt4` (single 256-bit op + per-lane reduce): `1,097,121`
   - after Horner `_evaluateInitialConstraint` + Merkle pointer advancement + dedup tracking: `1,092,539`
+  - after branchless `_extrapolate_012_fast` (constant 2M/4M biases replacing 16 conditional branches + 8 dynamic biases) + optimizer_runs 645→325 for bytecode fit: `1,073,226`
+  - after `hornerBase` conditional→mod (4 `if iszero(lt(...))` per iteration → `mod(add(mulmod(...), c), M)`): `1,061,823`
+  - after branchless `KoalaBearExt4.add`/`sub` (4 conditional branches each → `mod(lane, M)`): `1,054,301`
+  - after removing 4 redundant `mod()` from t-computation in `_eqPolyEvalAt`/`_eqPolyEvalAtCalldata`: included in `1,054,301`
+  - after fused assembly mulAdd in `_combineConstraintEvals` (pre-unpacked challenge, schoolbook mul+add in single block): included in `1,054,301`
 - Accepted optimizations (continued):
   - assembly `_computeRootFromLeafHashes20`: interleaved (index, hash) buffers, inline keccak with cached scratch pointer, raw pointer arithmetic eliminating bounds checks and `compressNode20` calls
   - fused assembly `_computeEqTerm`: computes `1 + 2pq - p - q` per-lane in a single assembly block
@@ -452,7 +457,7 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - base-field specialized `_foldOnceBase`: when both fold inputs are base-field values (Round 0 first layer), d = (d0,0,0,0) so the ext4 schoolbook r\*d reduces from 16 muls to 4; saved `29,970` gas (`108,414` → `78,444` in Round 0 rowFolding)
   - Horner `_evaluateConstraint`: converted from explicit gamma-power tracking (`total += γ^k × w_k; γ^k *= challenge`) to Horner form (`total = total × challenge + w_k`, reverse iteration), eliminating one ext4 mul per weight evaluation (22 weights across 2 round constraints)
   - fused assembly mulAdd in `_evaluateConstraint` Horner step: inline assembly block pre-unpacks challenge lanes once, then does schoolbook ext4 mul+add in a single block without intermediate packing/unpacking
-  - optimizer_runs raised from 200 to 645 (max before WhirVerifier4 bytecode exceeds EIP-170 24,576-byte limit; at 645 the contract is 24,264 bytes with 312 margin; at 646 it jumps to 24,774)
+  - optimizer_runs raised from 200 to 645, then lowered to 325 (max before WhirVerifier4 bytecode exceeds EIP-170 24,576-byte limit with branchless arithmetic; at 325 the contract is 24,265 bytes with 311 margin; at 326 it jumps to 24,617)
   - production-only fixed-arity select path: `WhirVerifier4` now evaluates round-0 select constraints with a dedicated `12`-variable kernel and round-1 select constraints with a dedicated `8`-variable kernel instead of the generic dynamic-arity dispatch
   - dim-4 row evaluators now preload the 16 leaf values from calldata once per row and reuse those locals through the existing `_foldOnceBase` / `_foldOnceWithCoeffs` schedule, removing repeated calldata index arithmetic in the hottest STIR path
   - `sampleBitsUnchecked` fast path: verifier-controlled callers (`sampleStirQueries`, `checkWitness`) now bypass `sampleBits` range checks that are already guaranteed by fixed config invariants
@@ -464,6 +469,12 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - full-width packed `KoalaBearExt4.sub`: single `a + packed_p − b` then per-lane extract+reduce, replacing per-lane `mul(modulus, lt(...))` branchless borrow; sound because each lane of `a + p` exceeds max `b_i` (no inter-lane borrow)
   - Horner `_evaluateInitialConstraint`: reversed loop order (OOD points first, then statement points), `total = weight + total × challenge` instead of `total += γ^k × weight; γ^k *= challenge`, saving one ext4 mul per point; previous attempt was rejected for bytecode pressure, but combined with add/sub shrinking bytecode, now fits at optimizer_runs=645
   - Merkle `_computeRootFromLeafHashes20` pointer advancement: `idxPtr`/`hashPtr` advance by 0x20 instead of recomputing `shl(5, i)` offset; `decommPtr`/`decommEnd` replace counter-based `decommCursor`; `hasLastParent`/`lastParentIndex` replace re-reading last entry for dedup check
+  - branchless `_extrapolate_012_fast`: replaced all 16 conditional branches (`if iszero(lt(...))`) and 8 dynamic bias patterns (`mul(M, lt(a, b))`) with constant biases (2M for q2, 4M for q1) using `mulmod(..., invTwo, M)`; saved ~15,222 gas. Overflow safety: q2 arg ∈ [2, 4M−2], q1 arg ∈ [4, 8M−4], both always positive and fit uint256
+  - `hornerBase` conditional→mod: replaced 4 `if iszero(lt(r, M)) { r := sub(r, M) }` per iteration with `mod(add(mulmod(a, var_, M), c), M)` (sum ∈ [0, 2M−2]); 5 call sites × 16 iterations × 4 lanes; saved ~11,403 gas
+  - branchless `KoalaBearExt4.add`/`sub`: replaced 4 conditional branches per function with direct `mod(lane, M)`; add lane sum ∈ [0, 2M−2], sub lane ∈ [1, 2M−1] after M-bias; saved ~7,522 gas (inlined everywhere)
+  - removed 4 redundant `mod()` from t-computation in `_eqPolyEvalAt`/`_eqPolyEvalAtCalldata`: t_i < 2^67, subsequent schoolbook products < 2^98 ≪ 2^256
+  - fused assembly mulAdd in `_combineConstraintEvals`: pre-unpacked challenge (ch0..ch3), schoolbook ext4 mul+add in single assembly block with separate loops for selEvals and eqEvals
+  - optimizer_runs lowered from 645 to 325 (max before bytecode exceeds EIP-170 with branchless code; at 325 the contract is 24,265 bytes with 311 margin; at 326 it jumps to 24,617)
 - Rejected optimizations (continued):
   - Horner scheme in `_evaluateConstraint`, `_combineConstraintEvals`, `_evaluateInitialConstraint`: all three caused `stack-too-deep` because the reversed loop adds one extra live variable beyond the 16-slot Yul stack limit when `_eqPolyEvalAt` is inlined
   - low-level assembly rewrite of `_mul_packed`: +208k gas regression (compiler optimizes the Solidity version better)
@@ -474,15 +485,19 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - smaller Merkle arithmetic cleanup (`shl(6, ...)` entry offsets + hoisted `decommitments.offset`): behavior preserved but verifier gas was a pure tie at `1,228,312`; reverted by the keep rule
   - fixed-arity eq specialization (`16`/`12`/`8` variable kernels for initial + round constraints): regressed verifier gas from `1,218,367` to `1,219,238`; reverted while keeping the select-only specialization
   - direct packed-ext4 challenger sampler (`samplePackedExt4` replacing 4× `sampleBase`): preserved transcript parity but regressed verifier gas from `1,193,931` to `1,200,031`; reverted
+  - WhirVerifier4 fused assembly mulAdd in `_combineInitialConstraintEvals`/`_evaluateInitialConstraint`: saved 1,769 gas but added 1,314 bytes of bytecode (24,485 → 25,799), exceeding EIP-170 even at optimizer_runs=1 (24,913); reverted
+  - generic constraint path (`_evaluateConstraints` replacing `_evaluateConstraintsFixedSelect`): saved 1,028 bytes but added 3,225 gas from compiler inlining differences; not worth the gas regression
+  - selectPoly function deduplication (generic `_selectPolyEvalAt` replacing arity-specialized kernels): compiler already deduplicates — identical bytecode output
+  - delayed-mod in selectPoly loops: JUMPI (10 gas) overhead per iteration makes counter-based batching net-negative
 - Current steady-state measurements after the accepted Stage 4 pass:
-  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,092,539` (at optimizer_runs=645, bytecode `24,334` bytes)
-  - direct verification transaction (`EOA -> WhirVerifier4.verify(...)` via Anvil): `1,172,160` total tx gas (execution `938,468` + calldata/intrinsic `233,692`)
-  - wrapper verification transaction (`EOA -> VerifyWrapper -> WhirVerifier4.verify(...)` via Anvil): `1,211,594` total tx gas (execution `977,534` + calldata/intrinsic `234,060`, wrapper overhead `39,434`)
+  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,054,301` (at optimizer_runs=325, bytecode `24,265` bytes)
+  - direct verification transaction (`EOA -> WhirVerifier4.verify(...)` via Anvil): `1,132,592` total tx gas (execution `898,900` + calldata/intrinsic `233,692`)
+  - wrapper verification transaction (`EOA -> VerifyWrapper -> WhirVerifier4.verify(...)` via Anvil): `1,172,266` total tx gas (execution `938,206` + calldata/intrinsic `234,060`, wrapper overhead `39,674`)
   - calldata bytes for the current typed ABI entrypoint: `23,620`
   - **Cross-verifier comparison** (sol-spartan-whir WHIR-only vs sol-whir BN254, same 80-bit security / ff4 / 16-var):
-    - sol-spartan-whir: execution `977,534` (wrapper), total tx `1,211,594`, calldata+intrinsic `234,060`
+    - sol-spartan-whir: execution `938,206` (wrapper), total tx `1,172,266`, calldata+intrinsic `234,060`
     - sol-whir: execution `699,176` (wrapper), total tx `1,135,052`, calldata+intrinsic `435,876`
-    - sol-spartan-whir has ~40% higher execution gas but only ~6.7% higher total tx gas due to smaller field elements reducing calldata cost
+    - sol-spartan-whir has ~34% higher execution gas but only ~3.3% higher total tx gas due to smaller field elements reducing calldata cost
   - **Tx gas measurement methodology**: deploy wrapper contract storing `verify()` result in state; `forge script --broadcast` against local Anvil; read `gasUsed` from `broadcast/.../run-latest.json`. Scripts: `sol-spartan-whir/script/MeasureTxGas.s.sol`, `sol-whir/script/Verify.s.sol`.
 - Current STIR internal breakdown instrumentation (from `test/WhirGasProfile.t.sol`, same fixed 16-variable, 2-round fixture family):
   - the profiler now splits each STIR call into `sampleQueries`, `leafHashing`, `merkleReduction`, `pow`, `rowFolding`, and residual `overhead`

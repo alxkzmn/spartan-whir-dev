@@ -121,7 +121,7 @@ All Solidity-facing proof and config structs are defined in Stage 0 before the R
 - `uint256 numQueries`
 - `uint256 rowLen`
 - `uint256[] values` -- flat row-major array. For base queries, each value is one `uint256` base-field element. For extension queries, each value is one `uint256` packed extension element.
-- `bytes32[] decommitments` -- Merkle sibling hashes for the multiproof.
+- `bytes32[] decommitments` -- flat query-major concatenation of per-query Merkle sibling paths. For a batch with `numQueries = q` and Merkle depth `d`, the array length is exactly `q * d`, ordered as all `d` siblings for query 0, then all `d` siblings for query 1, and so on.
 
 **SumcheckData** (WHIR folding sumcheck data for one phase):
 
@@ -438,6 +438,7 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - after branchless `KoalaBearExt4.add`/`sub` (4 conditional branches each → `mod(lane, M)`): `1,054,301`
   - after removing 4 redundant `mod()` from t-computation in `_eqPolyEvalAt`/`_eqPolyEvalAtCalldata`: included in `1,054,301`
   - after fused assembly mulAdd in `_combineConstraintEvals` (pre-unpacked challenge, schoolbook mul+add in single block): included in `1,054,301`
+  - after linearized Merkle auth paths + full inline assembly `_computeRootFromLeafHashes20` (per-query sibling paths, outer loop over queries, inner loop over depth levels, inline keccak256, no function calls, no bounds checks) + optimizer_runs 325→500: `986,923`
 - Accepted optimizations (continued):
   - assembly `_computeRootFromLeafHashes20`: interleaved (index, hash) buffers, inline keccak with cached scratch pointer, raw pointer arithmetic eliminating bounds checks and `compressNode20` calls
   - fused assembly `_computeEqTerm`: computes `1 + 2pq - p - q` per-lane in a single assembly block
@@ -457,7 +458,7 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - base-field specialized `_foldOnceBase`: when both fold inputs are base-field values (Round 0 first layer), d = (d0,0,0,0) so the ext4 schoolbook r\*d reduces from 16 muls to 4; saved `29,970` gas (`108,414` → `78,444` in Round 0 rowFolding)
   - Horner `_evaluateConstraint`: converted from explicit gamma-power tracking (`total += γ^k × w_k; γ^k *= challenge`) to Horner form (`total = total × challenge + w_k`, reverse iteration), eliminating one ext4 mul per weight evaluation (22 weights across 2 round constraints)
   - fused assembly mulAdd in `_evaluateConstraint` Horner step: inline assembly block pre-unpacks challenge lanes once, then does schoolbook ext4 mul+add in a single block without intermediate packing/unpacking
-  - optimizer_runs raised from 200 to 645, then lowered to 325 (max before WhirVerifier4 bytecode exceeds EIP-170 24,576-byte limit with branchless arithmetic; at 325 the contract is 24,265 bytes with 311 margin; at 326 it jumps to 24,617)
+  - optimizer_runs raised from 200 to 645, then lowered to 325 (max before WhirVerifier4 bytecode exceeds EIP-170 24,576-byte limit with branchless arithmetic; at 325 the contract is 24,265 bytes with 311 margin; at 326 it jumps to 24,617); later raised to 500 after linearized Merkle paths + assembly rewrite shrank bytecode (at 500 the contract is 24,290 bytes with 286 margin; at 501 it jumps to 25,526)
   - production-only fixed-arity select path: `WhirVerifier4` now evaluates round-0 select constraints with a dedicated `12`-variable kernel and round-1 select constraints with a dedicated `8`-variable kernel instead of the generic dynamic-arity dispatch
   - dim-4 row evaluators now preload the 16 leaf values from calldata once per row and reuse those locals through the existing `_foldOnceBase` / `_foldOnceWithCoeffs` schedule, removing repeated calldata index arithmetic in the hottest STIR path
   - `sampleBitsUnchecked` fast path: verifier-controlled callers (`sampleStirQueries`, `checkWitness`) now bypass `sampleBits` range checks that are already guaranteed by fixed config invariants
@@ -474,7 +475,9 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - branchless `KoalaBearExt4.add`/`sub`: replaced 4 conditional branches per function with direct `mod(lane, M)`; add lane sum ∈ [0, 2M−2], sub lane ∈ [1, 2M−1] after M-bias; saved ~7,522 gas (inlined everywhere)
   - removed 4 redundant `mod()` from t-computation in `_eqPolyEvalAt`/`_eqPolyEvalAtCalldata`: t_i < 2^67, subsequent schoolbook products < 2^98 ≪ 2^256
   - fused assembly mulAdd in `_combineConstraintEvals`: pre-unpacked challenge (ch0..ch3), schoolbook ext4 mul+add in single assembly block with separate loops for selEvals and eqEvals
-  - optimizer_runs lowered from 645 to 325 (max before bytecode exceeds EIP-170 with branchless code; at 325 the contract is 24,265 bytes with 311 margin; at 326 it jumps to 24,617)
+  - linearized Merkle authentication paths: replaced compact multiproof (frontier reduction with dedup) with independent per-query sibling paths; proof grew by 2,368 bytes (74 extra hashes) but merkleReduction dropped from ~371k to ~165k total
+  - full inline assembly `_computeRootFromLeafHashes20` for linear auth paths: outer loop over queries, inner loop over depth levels, inline keccak256 with pre-stored 0x01 domain separator, `digestMask` via AND, switch-based left/right child ordering, 65-byte scratch area allocated once; eliminated all function calls (`compressNode20`), bounds checks, and memory management; combined with linearized paths and optimizer_runs 325→500, saved 67,378 gas total
+  - optimizer_runs lowered from 645 to 325, then raised to 500 after linearized Merkle + assembly rewrite (at 500 the contract is 24,290 bytes with 286 margin; at 501 it jumps to 25,526)
 - Rejected optimizations (continued):
   - Horner scheme in `_evaluateConstraint`, `_combineConstraintEvals`, `_evaluateInitialConstraint`: all three caused `stack-too-deep` because the reversed loop adds one extra live variable beyond the 16-slot Yul stack limit when `_eqPolyEvalAt` is inlined
   - low-level assembly rewrite of `_mul_packed`: +208k gas regression (compiler optimizes the Solidity version better)
@@ -490,39 +493,39 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - selectPoly function deduplication (generic `_selectPolyEvalAt` replacing arity-specialized kernels): compiler already deduplicates — identical bytecode output
   - delayed-mod in selectPoly loops: JUMPI (10 gas) overhead per iteration makes counter-based batching net-negative
 - Current steady-state measurements after the accepted Stage 4 pass:
-  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,054,301` (at optimizer_runs=325, bytecode `24,265` bytes)
-  - direct verification transaction (`EOA -> WhirVerifier4.verify(...)` via Anvil): `1,132,592` total tx gas (execution `898,900` + calldata/intrinsic `233,692`)
-  - wrapper verification transaction (`EOA -> VerifyWrapper -> WhirVerifier4.verify(...)` via Anvil): `1,172,266` total tx gas (execution `938,206` + calldata/intrinsic `234,060`, wrapper overhead `39,674`)
-  - calldata bytes for the current typed ABI entrypoint: `23,620`
+  - `WhirVerifier4.testGasWhirVerifyFixed()`: `986,923` (at optimizer_runs=500, bytecode `24,290` bytes)
+  - direct verification transaction (`EOA -> WhirVerifier4.verify(...)` via Anvil): `1,077,945` total tx gas (execution `817,105` + calldata/intrinsic `260,840`)
+  - wrapper verification transaction (`EOA -> VerifyWrapper -> WhirVerifier4.verify(...)` via Anvil): `1,118,048` total tx gas (execution `856,840` + calldata/intrinsic `261,208`, wrapper overhead `39,735`)
+  - calldata bytes for the current typed ABI entrypoint: `25,988`
   - **Cross-verifier comparison** (sol-spartan-whir WHIR-only vs sol-whir BN254, same 80-bit security / ff4 / 16-var):
-    - sol-spartan-whir: execution `938,206` (wrapper), total tx `1,172,266`, calldata+intrinsic `234,060`
+    - sol-spartan-whir: execution `856,840` (wrapper), total tx `1,118,048`, calldata+intrinsic `261,208`
     - sol-whir: execution `699,176` (wrapper), total tx `1,135,052`, calldata+intrinsic `435,876`
-    - sol-spartan-whir has ~34% higher execution gas but only ~3.3% higher total tx gas due to smaller field elements reducing calldata cost
+    - sol-spartan-whir has ~23% higher execution gas but **lower total tx gas** (-1.5%) due to smaller field elements reducing calldata cost
   - **Tx gas measurement methodology**: deploy wrapper contract storing `verify()` result in state; `forge script --broadcast` against local Anvil; read `gasUsed` from `broadcast/.../run-latest.json`. Scripts: `sol-spartan-whir/script/MeasureTxGas.s.sol`, `sol-whir/script/Verify.s.sol`.
 - Current STIR internal breakdown instrumentation (from `test/WhirGasProfile.t.sol`, same fixed 16-variable, 2-round fixture family):
   - the profiler now splits each STIR call into `sampleQueries`, `leafHashing`, `merkleReduction`, `pow`, `rowFolding`, and residual `overhead`
-  - Round 0 (`9` queries, depth `18`, base rows): total `312,872`
-    - `sampleQueries`: `9,299`
-    - `leafHashing`: `43,728`
-    - `merkleReduction`: `168,004`
-    - `pow`: `18,487`
-    - `rowFolding`: `67,815`
-    - `overhead`: `5,539`
-  - Round 1 (`6` queries, depth `17`, ext4 rows): total `243,986`
-    - `sampleQueries`: `6,440`
-    - `leafHashing`: `43,278`
-    - `merkleReduction`: `113,027`
-    - `pow`: `11,590`
-    - `rowFolding`: `64,650`
-    - `overhead`: `5,001`
-  - Final STIR (`5` queries, depth `16`, ext4 rows): total `199,741`
-    - `sampleQueries`: `5,669`
-    - `leafHashing`: `36,075`
-    - `merkleReduction`: `90,817`
-    - `pow`: `8,988`
-    - `rowFolding`: `53,740`
-    - `overhead`: `4,452`
-  - These measurements replace earlier rough estimates. The remaining dominant STIR costs are merkleReduction first and rowFolding second (both already assembly-optimized); query generation, pow, and residual overhead are materially smaller.
+- Round 0 (`9` queries, depth `18`, base rows): total `199,523`
+  - `sampleQueries`: `9,297`
+  - `leafHashing`: `20,674`
+  - `merkleReduction`: `77,660`
+  - `pow`: `18,487`
+  - `rowFolding`: `67,815`
+  - `overhead`: `5,590`
+- Round 1 (`6` queries, depth `17`, ext4 rows): total `158,741`
+  - `sampleQueries`: `6,428`
+  - `leafHashing`: `21,996`
+  - `merkleReduction`: `49,100`
+  - `pow`: `11,590`
+  - `rowFolding`: `64,650`
+  - `overhead`: `4,977`
+- Final STIR (`5` queries, depth `16`, ext4 rows): total `129,634`
+  - `sampleQueries`: `5,664`
+  - `leafHashing`: `18,349`
+  - `merkleReduction`: `38,373`
+  - `pow`: `9,003`
+  - `rowFolding`: `53,755`
+  - `overhead`: `4,490`
+- These measurements reflect the linearized Merkle auth paths with full inline assembly `_computeRootFromLeafHashes20`. The dominant STIR costs are now rowFolding first and merkleReduction second (both assembly-optimized); leafHashing, query generation, pow, and residual overhead are materially smaller.
 
 ### Assessed future optimizations (ranked by net tx-gas impact)
 

@@ -173,19 +173,19 @@ The file contains two contracts:
 
 **Key cost relationships (16-var, 2-round, foldingFactor=4 fixture):**
 
-| Component           | Gas     | Notes                                                                                       |
-| ------------------- | ------- | ------------------------------------------------------------------------------------------- |
-| Total verify        | ~1,054k | `testGasWhirVerifyFixed`                                                                    |
-| STIR (all 3 rounds) | ~474k   | 45% of total. Dominated by merkleReduction and rowFolding (both already assembly-optimized) |
-| Constraint eval     | ~181k   | 17% of total. eq-poly and select-poly evaluation                                            |
-| Sumchecks           | ~47k    | 4% of total. final select + final sumcheck                                                  |
-| Setup               | ~67k    | observePattern + parseCommitment                                                            |
+| Component           | Gas   | Notes                                                                                        |
+| ------------------- | ----- | -------------------------------------------------------------------------------------------- |
+| Total verify        | ~987k | `testGasWhirVerifyFixed`                                                                     |
+| STIR (all 3 rounds) | ~398k | 40% of total. Dominated by rowFolding; merkleReduction reduced by assembly linear auth paths |
+| Constraint eval     | ~181k | 18% of total. eq-poly and select-poly evaluation                                             |
+| Sumchecks           | ~47k  | 5% of total. final select + final sumcheck                                                   |
+| Setup               | ~66k  | observePattern + parseCommitment                                                             |
 
 **Per-query STIR costs:**
 
-- Row folding: ~10.8-13.5k/query (fold schedule varies by round) — already assembly-optimized
-- Merkle reduction: ~18.2-18.7k/query (depth×compressNode + index logic overhead) — already assembly-optimized
-- Leaf hashing: 4.9k (base) or 7.2k (ext4) per query — already assembly-optimized
+- Row folding: ~7.5-10.8k/query (fold schedule varies by round) — already assembly-optimized
+- Merkle reduction: ~7.7-8.6k/query (linear auth path, inline keccak) — already assembly-optimized
+- Leaf hashing: 2.3k (base) or 3.7k (ext4) per query — already assembly-optimized
 
 ### Flamegraph vs `gasleft()` Profiling
 
@@ -225,11 +225,11 @@ Both verifiers: 80-bit security, `foldingFactor = 4`, `numVariables = 16`.
 
 | Metric               | sol-spartan-whir (WHIR-only) | sol-whir (BN254) |
 | -------------------- | ---------------------------- | ---------------- |
-| Execution gas        | 1,054,301                    | 677,011          |
-| Total tx gas         | 1,172,266                    | 1,135,052        |
-| Calldata + intrinsic | 234,060                      | 435,876          |
+| Execution gas        | 986,923                      | 677,011          |
+| Total tx gas         | 1,118,048                    | 1,135,052        |
+| Calldata + intrinsic | 261,208                      | 435,876          |
 
-sol-spartan-whir has higher execution gas (~56%) but only ~3.3% higher total tx gas because smaller field elements yield less calldata.
+sol-spartan-whir has higher execution gas (~46%) but **lower total tx gas** (-1.5%) because smaller field elements yield less calldata.
 
 **How to measure total tx gas:**
 

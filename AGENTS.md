@@ -57,6 +57,14 @@ This workspace contains several sibling projects. They serve different roles:
 
 Any change to transcript ordering, proof encoding, digest layout, Merkle hashing, or domain separator construction will break the Solidity verifier if not mirrored there. These are protocol-level changes. When making such a change, state explicitly which Solidity components are affected and what needs to be updated.
 
+### Exporter runs: always use release mode
+
+The fixture exporter does real proving work and can be very slow in debug builds. When regenerating fixtures or generated Solidity from `spartan-whir-export`, always run the exporter in release mode:
+
+- `cargo run --release -p spartan-whir-export --bin export-fixtures -- <output-dir>`
+
+Do not use the debug `cargo run` path for normal fixture regeneration unless you are intentionally debugging the exporter itself.
+
 ### Source-of-truth boundaries
 
 - **Verification logic**: `./spartan-whir/src/protocol.rs`, `./spartan-whir/src/whir_pcs.rs`, `./whir-p3/src/whir/verifier/mod.rs`.
@@ -225,11 +233,41 @@ sol-spartan-whir has higher execution gas (~56%) but only ~3.3% higher total tx 
 
 **How to measure total tx gas:**
 
-1. Deploy a wrapper contract that stores the `verify()` result in state (making it state-changing).
-2. Run `forge script` against a local `anvil` instance with `--broadcast`.
-3. Read `gasUsed` from `broadcast/<ScriptName>.s.sol/31337/run-latest.json`.
+Scripts: `sol-spartan-whir/script/MeasureTxGas.s.sol` (wrapper tx), `sol-spartan-whir/script/WhirTxBenchmark.s.sol` (direct tx), `sol-whir/script/Verify.s.sol` (sol-whir baseline).
 
-Scripts: `sol-spartan-whir/script/MeasureTxGas.s.sol`, `sol-whir/script/Verify.s.sol`.
+Step-by-step commands (run from `sol-spartan-whir/`):
+
+```bash
+# 1. Start anvil in a background terminal
+anvil --silent          # isBackground=true
+
+# 2. Direct tx measurement (WhirTxBenchmark.s.sol — single contract, no --tc needed)
+forge script script/WhirTxBenchmark.s.sol \
+  --rpc-url http://127.0.0.1:8545 --broadcast --slow \
+  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+
+# 3. Wrapper tx measurement (MeasureTxGas.s.sol — two contracts, needs --tc)
+forge script script/MeasureTxGas.s.sol --tc MeasureTxGas \
+  --rpc-url http://127.0.0.1:8545 --broadcast --slow \
+  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+
+# 4. Kill anvil when done
+pkill -f "anvil"
+```
+
+Key gotchas:
+
+- **`--private-key` is required.** Without it, Foundry uses `vm.startBroadcast()` with no sender, which silently produces empty receipts and exits with "You seem to be using Foundry's default sender." Use anvil's default account 0 key shown above.
+- **`--tc MeasureTxGas`** is required for `MeasureTxGas.s.sol` because it contains two contracts (`VerifyWrapper` and `MeasureTxGas`). `WhirTxBenchmark.s.sol` has only one `Script` contract so `--tc` is not needed.
+- **`--slow`** serializes transactions — necessary for correct receipt ordering.
+
+Reading results from broadcast JSON:
+
+- Direct tx: `broadcast/WhirTxBenchmark.s.sol/31337/run-latest.json` — Receipt[1] (Receipt[0] is the CREATE).
+- Wrapper tx: `broadcast/MeasureTxGas.s.sol/31337/run-latest.json` — Receipt[2] (Receipt[0] = WhirVerifier4 CREATE, Receipt[1] = VerifyWrapper CREATE, Receipt[2] = verifyAndStore CALL).
+- `gasUsed` is hex-encoded in receipts; convert with `int(value, 16)`.
+- The `WhirTxBenchmark` script also logs calldata breakdown (zero/nonzero bytes, calldata gas) to console during the run. For the wrapper calldata breakdown, extract the input bytes from `transactions[2].transaction.input` in the broadcast JSON and count zero/nonzero bytes.
+- **Automated parsing**: run `python3 parse_tx_gas.py` (in `sol-spartan-whir/`) after both broadcasts. It parses the broadcast artifacts and prints full gas breakdowns including calldata byte counts, execution remainders, and wrapper overhead. Supports `python3 parse_tx_gas.py direct` or `python3 parse_tx_gas.py wrapper` for individual results.
 
 ## Implementation Stages (Summary)
 

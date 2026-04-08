@@ -524,6 +524,77 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
     - `overhead`: `4,452`
   - These measurements replace earlier rough estimates. The remaining dominant STIR costs are merkleReduction first and rowFolding second (both already assembly-optimized); query generation, pow, and residual overhead are materially smaller.
 
+### Assessed future optimizations (ranked by net tx-gas impact)
+
+These are proof-format or protocol-level changes that go beyond pure Solidity micro-optimization. Each was assessed against real fixture data (16-var, 2-round, foldingFactor=4, queries 9/6/5, depths 18/17/16). Current fixture has 270 Merkle decommitments (123 + 81 + 66) and 344 total compress calls (270 decomm-backed + 37 in-frontier merges + 37 dedup events).
+
+**1. Linearized Merkle authentication paths (implemented April 2026)**
+
+The compact multiproof (frontier reduction with dedup) was replaced with independent per-query authentication paths, still carried in the flat `bytes32[] decommitments` ABI field as query-major concatenation of sibling paths. The Rust prover now flattens the default Plonky3 `open_batch(...).opening_proof` outputs directly, and both the Rust and Solidity verifiers hash each path independently.
+
+Measured result on the deployable branch:
+
+- Success-proof ABI size: `22,816 -> 25,184` bytes (`+2,368`, exactly 74 extra sibling hashes)
+- `merkleReduction` in the STIR breakdown:
+  - Round0: `167,987 -> 77,672`
+  - Round1: `112,968 -> 49,112`
+  - Final: `90,751 -> 38,385`
+  - Total: `371,706 -> 165,169` (`-206,537`)
+- `WhirVerifier4.testGasWhirVerifyFixed()` at the highest deployable optimizer point for the new design:
+  - old compact-multiproof baseline: `1,092,539` at `optimizer_runs = 325`
+  - new linearized-path verifier: `1,052,065` at `optimizer_runs = 99`
+
+The verifier gas comparison is not perfectly apples-to-apples because the proof-format change forced `WhirVerifier4` to retune from `optimizer_runs = 325` down to `99` to remain under EIP-170. The new default deployable bytecode is `24,490` bytes (86-byte margin), and `optimizer_runs = 100` is already over the limit. The STIR breakdown above is the cleaner proof that the protocol change removed the intended Merkle work.
+
+Net effect: accepted. Same security model, more calldata, materially less execution gas.
+
+Follow-up: the Solidity-level linear auth path loop (calling `compressNode20()`) was replaced with a full inline assembly `_computeRootFromLeafHashes20` — outer loop over queries, inner loop over depth levels, inline keccak256 with pre-stored `0x01` domain separator, `digestMask` applied via AND, switch-based left/right child ordering, 65-byte scratch area allocated once. This eliminated all function call overhead, bounds checks, and memory management. Combined with optimizer_runs rising from 99 to 500 (enabled by bytecode savings from eliminating `observePattern` bloat that had been reverted to hex literal form), the net effect was:
+
+- `WhirVerifier4.testGasWhirVerifyFixed()`: `1,054,301` (pre-linearization baseline) → `986,923` (`-67,378` / `-6.4%`)
+- Total wrapper tx: `1,172,266` → `1,118,048` (`-54,218`), now **cheaper than sol-whir** (`1,135,052`)
+- optimizer_runs: `325` → `500` (bytecode 24,290, 286-byte margin)
+
+**2. Terminal phase redesign (protocol change)**
+
+Current terminal costs: final STIR `130,681` + final select `25,734` + final sumcheck `21,288` + final value check `10,935` = `188,638` total.
+
+- Easy win (remove final sumcheck, send polynomial directly): saves ~`21,000`. Protocol-trivial.
+- Full redesign (remove final STIR entirely, direct polynomial opening): saves up to ~`152,000`. Requires the final polynomial to be small enough to send without a proximity test, which changes the security argument.
+
+| Variant                    | Execution savings | Confidence |
+| -------------------------- | ----------------- | ---------- |
+| Remove final sumcheck only | ~21,000           | high       |
+| Full terminal redesign     | ~80,000–152,000   | medium     |
+
+**3. Schedule tuning (parameter change, same protocol)**
+
+Each eliminated query saves ~32,000–37,000 verifier gas. Current schedule (9/6/5 queries) is already balanced. Candidates like `ConstantFromSecondRound(3,4)` may shift the query/fold trade-off. Needs generated fixtures and actual benchmarking — no reliable estimate without data.
+
+| Metric                     | Value      |
+| -------------------------- | ---------- |
+| Realistic verifier savings | 0–60,000   |
+| Confidence                 | low–medium |
+
+See the Schedule Tuning Pass section below for the evaluation process.
+
+**4. Transcript-native proof encoding (encoding change)**
+
+Current transcript observation involves packing/unpacking field elements into challenger bytes. A binary/blob layout where proof data is already in transcript-native byte order could reduce observe overhead.
+
+Real savings are ~`20,000–40,000` execution gas (not the 40k–80k initially estimated — the ext4 observation count is ~4–8, not 50+). Calldata impact depends on binary wrapper design.
+
+Confidence: medium-low. This overlaps with Stage 7 blob wrapper work. The transcript byte-level compatibility risk (highest correctness risk in the project) makes this a careful-execution item.
+
+**5. Sumcheck: send extra round data (proof format change)**
+
+Current all-sumcheck cost is ~`47,000` (final select + final sumcheck). Sending one additional value per round (e.g., `h(1)` or coefficients) could eliminate `extrapolate_012` calls (~3,591 each × 4 rounds = ~14,000). Extra calldata: 512–1,024 bytes.
+
+Net tx-gas savings: ~`10,000–15,000`. Modest upside; not a priority.
+
+**6. More grinding (exhausted)**
+
+`pow_bits = 30` is the practical ceiling in a 31-bit field. No room for additional PoW-vs-query trade-off.
+
 ### Schedule Tuning Pass (after Stage 4, before Stage 5)
 
 The verifier remains generated from Rust-derived schedule constants. This pass decides which schedule is frozen into the remaining fixtures, benchmarks, and generated fixed-config wrappers after we already have a working standalone WHIR verifier and first gas numbers.

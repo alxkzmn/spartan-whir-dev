@@ -34,6 +34,7 @@ Known constraints:
 Usage:
   python3 whir_param_sweep.py
   python3 whir_param_sweep.py --num-vars 20
+  python3 whir_param_sweep.py --max-starting-log-inv-rate 11
 """
 
 import math
@@ -48,7 +49,8 @@ SECURITY_LEVEL = 80
 MAX_POW_BITS = 30  # hard limit: (1 << bits) < F::ORDER_U32 for 31-bit primes
 TWO_ADICITY = 24  # KoalaBear (BabyBear = 27, irrelevant for num_vars <= 16)
 MAX_SEND = 6  # MAX_NUM_VARIABLES_TO_SEND_COEFFS
-MAX_STARTING_LOG_INV_RATE = 11  # empirical prover-time cap for proof_size_roundtrip
+DEFAULT_MAX_STARTING_LOG_INV_RATE = 6  # current practical client/mobile ceiling
+ABSOLUTE_MAX_STARTING_LOG_INV_RATE = 11  # broader exploratory sweep ceiling
 
 
 def eta_cb(log_inv_rate: int) -> float:
@@ -694,12 +696,18 @@ class SweepResult:
     group: str  # "Constant(4)", "Constant(5)", "ConstantFromSecondRound(...,4)", etc.
 
 
-def max_starting_log_inv_rate(num_vars: int, ff_0: int) -> int:
-    """Largest starting_log_inv_rate allowed by validity and the empirical prover-time cap."""
-    return min(MAX_STARTING_LOG_INV_RATE, TWO_ADICITY - num_vars + ff_0)
+def max_starting_log_inv_rate(
+    num_vars: int, ff_0: int, practical_cap: int = DEFAULT_MAX_STARTING_LOG_INV_RATE
+) -> int:
+    """Largest starting_log_inv_rate allowed by validity and the chosen search cap."""
+    capped = min(practical_cap, ABSOLUTE_MAX_STARTING_LOG_INV_RATE)
+    return min(capped, TWO_ADICITY - num_vars + ff_0)
 
 
-def print_sweep(num_vars: int = 16):
+def print_sweep(
+    num_vars: int = 16,
+    max_starting_log_inv_rate_cap: int = DEFAULT_MAX_STARTING_LOG_INV_RATE,
+):
     print(
         f"WHIR Parameter Sweep — {num_vars} variables, {SECURITY_LEVEL}-bit security, "
         f"quartic extension ({FIELD_SIZE_BITS}-bit)"
@@ -713,8 +721,9 @@ def print_sweep(num_vars: int = 16):
     # Sweep the full validity space instead of a curated subset:
     #   - Constant(ff): ff in [1, num_vars]
     #   - ConstantFromSecondRound(ff_0, ff_rest): 1 <= ff_rest < ff_0 <= num_vars
-    #   - starting_log_inv_rate in [1, min(11, TWO_ADICITY - num_vars + ff_0)]
-    #     (11 is an empirical prover-time cap; higher values are valid but too slow)
+    #   - starting_log_inv_rate in [1, min(cap, TWO_ADICITY - num_vars + ff_0)]
+    #     (default cap = 6 for current practical client/mobile policy;
+    #      use --max-starting-log-inv-rate 11 for broader exploratory sweeps)
     MAX_POW = MAX_POW_BITS
 
     # Current baseline
@@ -755,7 +764,7 @@ def print_sweep(num_vars: int = 16):
     # 1. Constant(ff) — ff_0 == ff_rest
     for ff in range(1, num_vars + 1):
         group = f"Constant({ff})"
-        max_lir = max_starting_log_inv_rate(num_vars, ff)
+        max_lir = max_starting_log_inv_rate(num_vars, ff, max_starting_log_inv_rate_cap)
         if max_lir < 1:
             continue
         for lir in range(1, max_lir + 1):
@@ -766,7 +775,9 @@ def print_sweep(num_vars: int = 16):
     for ff_rest in range(1, num_vars):
         for ff_0 in range(ff_rest + 1, num_vars + 1):
             group = f"ConstantFromSecondRound(*,{ff_rest})"
-            max_lir = max_starting_log_inv_rate(num_vars, ff_0)
+            max_lir = max_starting_log_inv_rate(
+                num_vars, ff_0, max_starting_log_inv_rate_cap
+            )
             if max_lir < 1:
                 continue
             for lir in range(1, max_lir + 1):
@@ -807,7 +818,13 @@ def print_sweep(num_vars: int = 16):
     )
     print(f"  • Configs with derived PoW > {MAX_POW_BITS} are excluded (invalid)")
     print(
-        f"  • starting_log_inv_rate is capped at {MAX_STARTING_LOG_INV_RATE} by empirical prover-time policy"
+        "  • execution-gas model uses a coarse terminal-tail bucket "
+        "(final sumcheck rounds + residual terminal verifier work)"
+    )
+    print(
+        f"  • starting_log_inv_rate is capped at {min(max_starting_log_inv_rate_cap, ABSOLUTE_MAX_STARTING_LOG_INV_RATE)} "
+        f"for this sweep; current practical default is {DEFAULT_MAX_STARTING_LOG_INV_RATE}, "
+        f"broader exploratory cap is {ABSOLUTE_MAX_STARTING_LOG_INV_RATE}"
     )
     print(
         f"  • rs_domain_initial_reduction_factor: round-0 rate growth = ff_0 - rs_domain_initial_reduction_factor"
@@ -828,5 +845,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num-vars", type=int, default=16, help="Number of variables (default: 16)"
     )
+    parser.add_argument(
+        "--max-starting-log-inv-rate",
+        type=int,
+        default=DEFAULT_MAX_STARTING_LOG_INV_RATE,
+        help=(
+            "Practical starting_log_inv_rate sweep cap "
+            f"(default: {DEFAULT_MAX_STARTING_LOG_INV_RATE}, max useful exploratory cap: "
+            f"{ABSOLUTE_MAX_STARTING_LOG_INV_RATE})"
+        ),
+    )
     args = parser.parse_args()
-    print_sweep(args.num_vars)
+    print_sweep(args.num_vars, args.max_starting_log_inv_rate)

@@ -49,7 +49,10 @@ This workspace contains several sibling projects. They serve different roles:
 
 - The Rust proof is encoded via `codec_v1.rs` as an `SPWB` binary blob.
 - For the Solidity verifier, the first correctness path uses typed ABI encoding (`abi.encode`/`abi.decode`), not the binary blob.
-- The binary blob wrapper is added later as a calldata optimization.
+- The current `stage4` standalone-WHIR verifier also has a fixed-shape quartic blob format (`WHRB`) with two Solidity paths:
+  - a decode-and-delegate wrapper over the typed verifier
+  - a fixed-shape native verifier that consumes the blob directly from calldata
+- Full-Spartan `SPWB` blob support is still later-stage work; do not confuse the current fixed-shape standalone blob with the general `SPWB` format.
 
 ## Rules for This Workspace
 
@@ -173,13 +176,15 @@ The file contains two contracts:
 
 **Key cost relationships (16-var, 2-round, foldingFactor=4 fixture):**
 
-| Component           | Gas   | Notes                                                                                        |
-| ------------------- | ----- | -------------------------------------------------------------------------------------------- |
-| Total verify        | ~987k | `testGasWhirVerifyFixed`                                                                     |
-| STIR (all 3 rounds) | ~398k | 40% of total. Dominated by rowFolding; merkleReduction reduced by assembly linear auth paths |
-| Constraint eval     | ~181k | 18% of total. eq-poly and select-poly evaluation                                             |
-| Sumchecks           | ~47k  | 5% of total. final select + final sumcheck                                                   |
-| Setup               | ~66k  | observePattern + parseCommitment                                                             |
+These numbers move frequently during verifier optimization work. Treat the table below as a rough shape guide only; the current canonical baseline lives in `./solidity_verifier_plan.md` and `testGasWhirVerifyFixed`.
+
+| Component           | Gas     | Notes                                                                            |
+| ------------------- | ------- | -------------------------------------------------------------------------------- |
+| Total verify        | ~1,007k | `testGasWhirVerifyFixed` on the current deployable local-diff baseline           |
+| STIR (all 3 rounds) | ~496k   | From current full-breakdown slices: `190,633 + 156,779 + 148,526`                |
+| Constraint eval     | ~185k   | Current fixed-select + initial-constraint total                                  |
+| Sumchecks           | ~93k    | Current full-breakdown total across initial, round0, round1, and final sumchecks |
+| Setup               | ~29k    | observePattern + parseCommitment on the current harness snapshot                 |
 
 **Per-query STIR costs:**
 
@@ -207,7 +212,7 @@ Focused profiling targets are much better than full verifier traces.
 
 ### Optimization Validation Workflow
 
-1. Run `forge test` — all 69 tests must pass
+1. Run `forge test` — all 108 tests must pass
 2. Run `forge test --match-test testGasWhirVerifyFixed -vv` — get the single canonical gas number
 3. Run `forge test --match-test testProfileFullBreakdown -vv` — verify phase-level breakdown
 4. Compare against previous numbers to confirm the delta matches expectations
@@ -220,6 +225,8 @@ The Solidity compiler with `via_ir = true` (used in this project) is aggressive 
 - Batch sumcheck validation: expected -5k, actual **+4.7k** (extra memory allocation outweighed saved checks)
 
 ### Cross-Verifier Gas Comparison (sol-spartan-whir vs sol-whir)
+
+The table below is a historical benchmark snapshot, not the live baseline. Re-run the scripts if you need current tx-gas numbers.
 
 Both verifiers: 80-bit security, `foldingFactor = 4`, `numVariables = 16`.
 

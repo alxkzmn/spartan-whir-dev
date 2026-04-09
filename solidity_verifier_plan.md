@@ -475,6 +475,11 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - removed 4 redundant `mod()` from t-computation in `_eqPolyEvalAt`/`_eqPolyEvalAtCalldata`: t_i < 2^67, subsequent schoolbook products < 2^98 ≪ 2^256
   - fused assembly mulAdd in `_combineConstraintEvals`: pre-unpacked challenge (ch0..ch3), schoolbook ext4 mul+add in single assembly block with separate loops for selEvals and eqEvals
   - optimizer_runs lowered from 645 to 325 (max before bytecode exceeds EIP-170 with branchless code; at 325 the contract is 24,265 bytes with 311 margin; at 326 it jumps to 24,617)
+  - lifetime-split fixed live path: round constraints now retain only `challenge`, OOD `flatPoints`, and STIR `vars`; OOD answers and folded row evaluations are Horner-accumulated immediately into `claimedEval` instead of being stored in long-lived verifier structs
+  - production-only compact commitment parsing: `FixedParsedCommitment` retains only the Merkle root and OOD flat points; OOD evaluation arrays are no longer materialized on the live verifier path
+  - fused round STIR + claim accumulation: `_verifyStirAndCombineConstraint` verifies STIR, samples the round challenge at the correct transcript point, accumulates OOD answers and folded-row evaluations immediately, and returns only the compact data needed later for fixed-select weight evaluation
+  - initial-constraint lifetime split: `_combineInitialConstraintEvals` now consumes `proof.initialOodAnswers` directly when forming the initial claim, while `_evaluateInitialConstraint` later uses only the retained flat points and statement points
+  - raw frontier allocation in `_computeRootFromFlatRows20`: replace `new bytes(...)` with direct free-memory allocation because the frontier buffer is fully overwritten before being read
 - Rejected optimizations (continued):
   - Horner scheme in `_evaluateConstraint`, `_combineConstraintEvals`, `_evaluateInitialConstraint`: all three caused `stack-too-deep` because the reversed loop adds one extra live variable beyond the 16-slot Yul stack limit when `_eqPolyEvalAt` is inlined
   - low-level assembly rewrite of `_mul_packed`: +208k gas regression (compiler optimizes the Solidity version better)
@@ -489,46 +494,74 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - generic constraint path (`_evaluateConstraints` replacing `_evaluateConstraintsFixedSelect`): saved 1,028 bytes but added 3,225 gas from compiler inlining differences; not worth the gas regression
   - selectPoly function deduplication (generic `_selectPolyEvalAt` replacing arity-specialized kernels): compiler already deduplicates — identical bytecode output
   - delayed-mod in selectPoly loops: JUMPI (10 gas) overhead per iteration makes counter-based batching net-negative
-- Current steady-state measurements after the accepted Stage 4 pass:
-  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,054,301` (at optimizer_runs=325, bytecode `24,265` bytes)
-  - direct verification transaction (`EOA -> WhirVerifier4.verify(...)` via Anvil): `1,132,592` total tx gas (execution `898,900` + calldata/intrinsic `233,692`)
-  - wrapper verification transaction (`EOA -> VerifyWrapper -> WhirVerifier4.verify(...)` via Anvil): `1,172,266` total tx gas (execution `938,206` + calldata/intrinsic `234,060`, wrapper overhead `39,674`)
-  - calldata bytes for the current typed ABI entrypoint: `23,620`
-  - **Cross-verifier comparison** (sol-spartan-whir WHIR-only vs sol-whir BN254, same 80-bit security / ff4 / 16-var):
-    - sol-spartan-whir: execution `938,206` (wrapper), total tx `1,172,266`, calldata+intrinsic `234,060`
-    - sol-whir: execution `699,176` (wrapper), total tx `1,135,052`, calldata+intrinsic `435,876`
-    - sol-spartan-whir has ~34% higher execution gas but only ~3.3% higher total tx gas due to smaller field elements reducing calldata cost
-  - **Tx gas measurement methodology**: deploy wrapper contract storing `verify()` result in state; `forge script --broadcast` against local Anvil; read `gasUsed` from `broadcast/.../run-latest.json`. Scripts: `sol-spartan-whir/script/MeasureTxGas.s.sol`, `sol-whir/script/Verify.s.sol`.
+- Rejected optimization for the lifetime-split pass:
+  - size-first helper relocation (`_statementFromCalldata`, `_concatenateEq`, `_emptySelect` moved out of `WhirVerifierCore4`): no deployable bytecode reduction and no gas change; reverted
+
+- Current local-diff deployable snapshot (9 April 2026):
+  - `foundry.toml`: `optimizer_runs = 833`
+  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,040,144`
+  - `WhirVerifier4.testVerifyQuarticWhirSuccessFixture()`: `1,039,990`
+  - deployed bytecode from `forge inspect src/whir/WhirVerifier4.sol:WhirVerifier4 deployedBytecode | wc -c`: `47,577` hex chars, about `23,788` bytes, so deployable under EIP-170 with about `788` bytes of headroom
+  - accepted delta for the lifetime-split non-protocol pass: `1,049,006 -> 1,040,144` (`-8,862`)
+    - compact live-path constraint split: `1,049,006 -> 1,041,352` (`-7,654`)
+    - raw frontier allocation in `_computeRootFromFlatRows20`: `1,041,352 -> 1,040,144` (`-1,208`)
+
+- Current phase-level profiler snapshot (from `test/WhirGasProfile.t.sol`, same fixed 16-variable, 2-round fixture family):
+  - `setup`: `35,678`
+  - `initial sumcheck`: `21,986`
+  - `round0 parse`: `24,155`
+  - `round0 STIR`: `191,948`
+  - `round0 sumcheck`: `22,617`
+  - `round1 parse`: `18,280`
+  - `round1 STIR`: `157,800`
+  - `round1 sumcheck`: `25,925`
+  - `observe finalPoly`: `12,274`
+  - `final STIR`: `149,195`
+  - `final select`: `0`
+  - `final sumcheck`: `22,168`
+  - `constraint fixed select`: `131,840`
+  - `constraint initial`: `52,050`
+  - `constraint evaluation total`: `183,890`
+  - `final value check`: `11,170`
+  - `sum of measured phases`: `877,086`
+
 - Current STIR internal breakdown instrumentation (from `test/WhirGasProfile.t.sol`, same fixed 16-variable, 2-round fixture family):
   - the profiler now splits each STIR call into `sampleQueries`, `leafHashing`, `merkleReduction`, `pow`, `rowFolding`, and residual `overhead`
-  - Round 0 (`9` queries, depth `18`, base rows): total `312,872`
-    - `sampleQueries`: `9,299`
-    - `leafHashing`: `43,728`
-    - `merkleReduction`: `168,004`
+  - Round 0 (`9` queries, depth `18`, base rows): total `291,365`
+    - `sampleQueries`: `9,297`
+    - `leafHashing`: `20,811`
+    - `merkleReduction`: `169,286`
     - `pow`: `18,487`
-    - `rowFolding`: `67,815`
-    - `overhead`: `5,539`
-  - Round 1 (`6` queries, depth `17`, ext4 rows): total `243,986`
-    - `sampleQueries`: `6,440`
-    - `leafHashing`: `43,278`
-    - `merkleReduction`: `113,027`
+    - `rowFolding`: `67,950`
+    - `overhead`: `5,534`
+  - Round 1 (`6` queries, depth `17`, ext4 rows): total `221,890`
+    - `sampleQueries`: `6,438`
+    - `leafHashing`: `21,940`
+    - `merkleReduction`: `112,189`
     - `pow`: `11,590`
-    - `rowFolding`: `64,650`
-    - `overhead`: `5,001`
-  - Final STIR (`5` queries, depth `16`, ext4 rows): total `199,741`
-    - `sampleQueries`: `5,669`
-    - `leafHashing`: `36,075`
-    - `merkleReduction`: `90,817`
+    - `rowFolding`: `64,740`
+    - `overhead`: `4,993`
+  - Final STIR (`5` queries, depth `16`, ext4 rows): total `181,328`
+    - `sampleQueries`: `5,666`
+    - `leafHashing`: `18,297`
+    - `merkleReduction`: `90,118`
     - `pow`: `8,988`
-    - `rowFolding`: `53,740`
-    - `overhead`: `4,452`
+    - `rowFolding`: `53,815`
+    - `overhead`: `4,444`
   - These measurements replace earlier rough estimates. The remaining dominant STIR costs are merkleReduction first and rowFolding second (both already assembly-optimized); query generation, pow, and residual overhead are materially smaller.
+
+- Current focused STIR detail profiling (from `test/WhirStirDetailProfile.t.sol`):
+  - final STIR materialization: `149,222`
+  - final STIR check-only: `0`
+  - Round 0 frontier: `frontierInit = 22,051`, `merkleLoopOnly = 164,867`
+  - Round 1 frontier: `frontierInit = 22,765`, `merkleLoopOnly = 109,065`
+  - Final frontier: `frontierInit = 19,094`, `merkleLoopOnly = 89,816`
 
 ### Assessed future optimizations (ranked by net tx-gas impact)
 
 These are proof-format or protocol-level changes that go beyond pure Solidity micro-optimization. Each was assessed against real fixture data (16-var, 2-round, foldingFactor=4, queries 9/6/5, depths 18/17/16). Current fixture has 270 Merkle decommitments (123 + 81 + 66) and 344 total compress calls (270 decomm-backed + 37 in-frontier merges + 37 dedup events).
 
-**1. Linearized Merkle authentication paths (implemented April 2026)**
+**1. Linearized Merkle authentication paths (historical protocol-redesign experiment, not current branch)**
 
 The compact multiproof (frontier reduction with dedup) was replaced with independent per-query authentication paths, still carried in the flat `bytes32[] decommitments` ABI field as query-major concatenation of sibling paths. The Rust prover now flattens the default Plonky3 `open_batch(...).opening_proof` outputs directly, and both the Rust and Solidity verifiers hash each path independently.
 

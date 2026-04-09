@@ -49,7 +49,10 @@ This workspace contains several sibling projects. They serve different roles:
 
 - The Rust proof is encoded via `codec_v1.rs` as an `SPWB` binary blob.
 - For the Solidity verifier, the first correctness path uses typed ABI encoding (`abi.encode`/`abi.decode`), not the binary blob.
-- The binary blob wrapper is added later as a calldata optimization.
+- The current `stage4` standalone-WHIR verifier also has a fixed-shape quartic blob format (`WHRB`) with two Solidity paths:
+  - a decode-and-delegate wrapper over the typed verifier
+  - a fixed-shape native verifier that consumes the blob directly from calldata
+- Full-Spartan `SPWB` blob support is still later-stage work; do not confuse the current fixed-shape standalone blob with the general `SPWB` format.
 
 ## Rules for This Workspace
 
@@ -209,7 +212,7 @@ Focused profiling targets are much better than full verifier traces.
 
 ### Optimization Validation Workflow
 
-1. Run `forge test` — all 79 tests must pass
+1. Run `forge test` — all 108 tests must pass
 2. Run `forge test --match-test testGasWhirVerifyFixed -vv` — get the single canonical gas number
 3. Run `forge test --match-test testProfileFullBreakdown -vv` — verify phase-level breakdown
 4. Compare against previous numbers to confirm the delta matches expectations

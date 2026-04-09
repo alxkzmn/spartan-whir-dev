@@ -173,13 +173,15 @@ The file contains two contracts:
 
 **Key cost relationships (16-var, 2-round, foldingFactor=4 fixture):**
 
-| Component           | Gas     | Notes                                                                                       |
-| ------------------- | ------- | ------------------------------------------------------------------------------------------- |
-| Total verify        | ~1,054k | `testGasWhirVerifyFixed`                                                                    |
-| STIR (all 3 rounds) | ~474k   | 45% of total. Dominated by merkleReduction and rowFolding (both already assembly-optimized) |
-| Constraint eval     | ~181k   | 17% of total. eq-poly and select-poly evaluation                                            |
-| Sumchecks           | ~47k    | 4% of total. final select + final sumcheck                                                  |
-| Setup               | ~67k    | observePattern + parseCommitment                                                            |
+These numbers move frequently during verifier optimization work. Treat the table below as a rough shape guide only; the current canonical baseline lives in `./solidity_verifier_plan.md` and `testGasWhirVerifyFixed`.
+
+| Component           | Gas     | Notes                                                                            |
+| ------------------- | ------- | -------------------------------------------------------------------------------- |
+| Total verify        | ~1,007k | `testGasWhirVerifyFixed` on the current deployable local-diff baseline           |
+| STIR (all 3 rounds) | ~496k   | From current full-breakdown slices: `190,633 + 156,779 + 148,526`                |
+| Constraint eval     | ~185k   | Current fixed-select + initial-constraint total                                  |
+| Sumchecks           | ~93k    | Current full-breakdown total across initial, round0, round1, and final sumchecks |
+| Setup               | ~29k    | observePattern + parseCommitment on the current harness snapshot                 |
 
 **Per-query STIR costs:**
 
@@ -207,7 +209,7 @@ Focused profiling targets are much better than full verifier traces.
 
 ### Optimization Validation Workflow
 
-1. Run `forge test` — all 69 tests must pass
+1. Run `forge test` — all 79 tests must pass
 2. Run `forge test --match-test testGasWhirVerifyFixed -vv` — get the single canonical gas number
 3. Run `forge test --match-test testProfileFullBreakdown -vv` — verify phase-level breakdown
 4. Compare against previous numbers to confirm the delta matches expectations
@@ -220,6 +222,8 @@ The Solidity compiler with `via_ir = true` (used in this project) is aggressive 
 - Batch sumcheck validation: expected -5k, actual **+4.7k** (extra memory allocation outweighed saved checks)
 
 ### Cross-Verifier Gas Comparison (sol-spartan-whir vs sol-whir)
+
+The table below is a historical benchmark snapshot, not the live baseline. Re-run the scripts if you need current tx-gas numbers.
 
 Both verifiers: 80-bit security, `foldingFactor = 4`, `numVariables = 16`.
 

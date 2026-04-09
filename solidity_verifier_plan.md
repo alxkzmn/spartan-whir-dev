@@ -480,6 +480,9 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - fused round STIR + claim accumulation: `_verifyStirAndCombineConstraint` verifies STIR, samples the round challenge at the correct transcript point, accumulates OOD answers and folded-row evaluations immediately, and returns only the compact data needed later for fixed-select weight evaluation
   - initial-constraint lifetime split: `_combineInitialConstraintEvals` now consumes `proof.initialOodAnswers` directly when forming the initial claim, while `_evaluateInitialConstraint` later uses only the retained flat points and statement points
   - raw frontier allocation in `_computeRootFromFlatRows20`: replace `new bytes(...)` with direct free-memory allocation because the frontier buffer is fully overwritten before being read
+  - `_computeRootFromFrontier20` mechanical pointer rewrite: keep the two-buffer frontier algorithm and proof semantics unchanged, but carry `nodeIsRight`, `nextReadPtr`, and `sameParent` explicitly so parent dedup is computed once per output entry and the read pointer advances in one place; saved `3,005` gas and slightly shrank deployed bytecode
+  - direct OOD point expansion into retained flat buffers: `_parseCommitment` and `_parseFixedCommitment` now write the sampled univariate-ext expansion straight into `oodStatement.flatPoints` / `oodFlatPoints` via `expandFromUnivariateExtInto`, eliminating one temporary `uint256[]` allocation and one copy loop per sampled point
+  - production raw two-round fixed-select entrypoint: `WhirVerifier4.verify` now keeps round-0 and round-1 `challenge` / `eqFlatPoints` / `selVars` as explicit locals and calls `_evaluateConstraintsFixedSelectRaw(...)`; the array/struct path remains as a wrapper for tests and generic helpers instead of the production hot path
 - Rejected optimizations (continued):
   - Horner scheme in `_evaluateConstraint`, `_combineConstraintEvals`, `_evaluateInitialConstraint`: all three caused `stack-too-deep` because the reversed loop adds one extra live variable beyond the 16-slot Yul stack limit when `_eqPolyEvalAt` is inlined
   - low-level assembly rewrite of `_mul_packed`: +208k gas regression (compiler optimizes the Solidity version better)
@@ -496,68 +499,118 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - delayed-mod in selectPoly loops: JUMPI (10 gas) overhead per iteration makes counter-based batching net-negative
 - Rejected optimization for the lifetime-split pass:
   - size-first helper relocation (`_statementFromCalldata`, `_concatenateEq`, `_emptySelect` moved out of `WhirVerifierCore4`): no deployable bytecode reduction and no gas change; reverted
+  - raw round-local fixed-select streaming (`FixedConstraint[]` replaced with explicit round locals and direct `_evaluateConstraint12Select` / `_evaluateConstraint8Select` calls from `WhirVerifier4.verify`): regressed canonical gas from `1,040,144` to `1,040,638` and increased `constraint fixed select` from `131,840` to `135,672`; reverted
+  - exact two-round fusion by unrolling the `WhirVerifier4.verify` round loop into explicit round-0 / round-1 blocks: lowered canonical gas to `1,019,279` but increased deployed bytecode to about `25,200` bytes, exceeding EIP-170; reverted as non-deployable
+  - round-0-only arity-specialized fixed parser (`_parseFixedCommitment12x2` for round 0, generic fixed-two-sample parser for round 1): lowered canonical gas to `1,014,923` but increased deployed bytecode to about `24,941` bytes, exceeding EIP-170; reverted as non-deployable
+  - fully generic live parser using `_parseFixedCommitment(..., oodSamples = 2)` for the initial commitment and both rounds: increased deployability margin only marginally beyond the fixed-two-sample helper but regressed canonical gas to `1,017,705`; rejected in favor of `_parseFixedCommitment2(...)` as the better size-first staging point
+  - follow-up parser specialization experiments after the wrapper reclaim:
+    - round-0-only specialization on top of the reclaimed wrapper state (`_parseFixedCommitment12x2` for round 0): deployable at about `24,455` bytes and lowered canonical gas to `1,007,368`, but was dominated by the initial-only variant and therefore not kept
+    - round-1-only specialization on top of the reclaimed wrapper state (`_parseFixedCommitment8x2` added on top of the round-0-only variant): lowered canonical gas further to `1,006,973` but increased deployed bytecode to about `24,811` bytes, exceeding EIP-170; reverted as non-deployable
+    - combined initial + round-0 specialization (`_parseFixedCommitment16x2` + `_parseFixedCommitment12x2`): lowered canonical gas to `1,006,406` but increased deployed bytecode to about `24,759` bytes, exceeding EIP-170; reverted as non-deployable
+  - deleting dead source-only parser helpers (`_parseFixedCommitment12x2`, `_parseFixedCommitment8x2`) after settling on the initial-only parser specialization: no change to canonical gas (`1,007,224`) and no change to deployed `WhirVerifier4` bytecode (`24,455` bytes), confirming they were already absent from the live runtime
 
 - Current local-diff deployable snapshot (9 April 2026):
   - `foundry.toml`: `optimizer_runs = 833`
-  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,040,144`
-  - `WhirVerifier4.testVerifyQuarticWhirSuccessFixture()`: `1,039,990`
-  - deployed bytecode from `forge inspect src/whir/WhirVerifier4.sol:WhirVerifier4 deployedBytecode | wc -c`: `47,577` hex chars, about `23,788` bytes, so deployable under EIP-170 with about `788` bytes of headroom
+  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,007,224`
+  - `WhirVerifier4.testVerifyQuarticWhirSuccessFixture()`: `1,007,070`
+  - deployed bytecode from `forge inspect src/whir/WhirVerifier4.sol:WhirVerifier4 deployedBytecode | wc -c`: `48,911` hex chars, about `24,455` bytes, so deployable under EIP-170 with about `121` bytes of headroom
+  - the accepted deltas below are kept as a historical progression from earlier staging points to this current baseline
   - accepted delta for the lifetime-split non-protocol pass: `1,049,006 -> 1,040,144` (`-8,862`)
     - compact live-path constraint split: `1,049,006 -> 1,041,352` (`-7,654`)
     - raw frontier allocation in `_computeRootFromFlatRows20`: `1,041,352 -> 1,040,144` (`-1,208`)
+  - accepted delta for the Merkle frontier-loop pass: `1,040,144 -> 1,037,139` (`-3,005`)
+  - accepted delta for the parser + raw fixed-select pass: `1,037,139 -> 1,022,824` (`-14,315`)
+    - direct OOD expansion into retained flat buffers: `1,037,139 -> 1,024,057` (`-13,082`)
+    - raw two-round fixed-select evaluator on the production path: `1,024,057 -> 1,022,824` (`-1,233`)
+  - accepted delta for the exact-shape initial-constraint pass: `1,022,824 -> 1,021,626` (`-1,198`)
+    - production-only fixed-shape initial claim accumulation: `_combineInitialConstraintEvalsSingle(...)`
+    - production-only fixed-shape initial weight evaluation: `_evaluateInitialConstraintSingle(...)`
+  - accepted delta for the follow-up fixed-config verifier pass: `1,021,626 -> 1,012,306` (`-9,320`)
+    - validate the fixed statement shape once in `WhirVerifier4.verify` and feed raw calldata/value inputs into production-only initial helpers (`_combineInitialConstraintEvalsSingleRaw`, `_evaluateInitialConstraintSingleRaw`): `1,021,626 -> 1,019,799` (`-1,827`)
+    - introduce a fixed-two-sample production parser (`_parseFixedCommitment2`) and use it on the live verifier path instead of the generic `oodSamples` loop: `1,019,799 -> 1,016,253` (`-3,546`)
+    - specialize the initial commitment parser by arity (`_parseFixedCommitment16x2`) while keeping the rounds on the fixed-two-sample generic parser: `1,016,253 -> 1,015,593` (`-660`)
+    - replace fixed-config round-parameter loads (`powBits`, `foldingFactor`, `nextFoldingFactor`, and `roundConfig(...)` scaffolding that was only selecting constants) with direct live constants: `1,015,593 -> 1,013,994` (`-1,599`)
+    - fully specialize the live fixed parsers by arity (`_parseFixedCommitment16x2`, `_parseFixedCommitment12x2`, `_parseFixedCommitment8x2`) once the earlier size savings created enough bytecode headroom: `1,013,994 -> 1,012,306` (`-1,688`)
+  - accepted delta for the explicit size-first pass: `1,012,306 -> 1,014,184` (`+1,878` gas) in exchange for `24,542 -> 23,214` bytes of deployed bytecode (`-1,328` bytes)
+    - roll back the live fixed parser path from fully arity-specialized wrappers to the fixed-two-sample generic helper (`_parseFixedCommitment2`) for the initial commitment and both rounds
+    - keep the fixed statement validation once-per-verify and the fixed-config round-constant cleanup, because those remain strong gas wins with favorable bytecode impact
+    - this is the chosen staging point for further verifier work because it restores over a kilobyte of EIP-170 margin while keeping canonical gas close to the minimum-gas local-diff state
+  - accepted delta for the follow-up structural wrapper pass: `1,014,184 -> 1,008,499` (`-5,685`)
+    - unroll the fixed two-round production wrapper in `WhirVerifier4.verify` into explicit round-0 and round-1 blocks
+    - keep the same parser helper (`_parseFixedCommitment2`), transcript order, STIR verification path, and sumcheck verification path
+    - replace loop-local ternary/config selection with round-local constants and direct round-local assignments
+    - simplify the final STIR expected-kind constant from `ROUND_COUNT == 0 ? 0 : 1` to the live fixed value `1`
+  - accepted delta for the subsequent small size-first wrapper reclaim: `1,008,499 -> 1,007,866` (`-633`) and `24,442 -> 24,129` bytes (`-313`)
+    - replace fixed-wrapper generic revert payloads with fixed-wrapper no-argument errors for:
+      - round-count mismatch
+      - missing final query batch
+      - missing final sumcheck
+      - fixed statement arity mismatch
+      - fixed final poly length mismatch
+      - fixed randomness length mismatch
+    - keep success-path behavior and transcript flow unchanged; this is a live-wrapper code-size cleanup only
+  - accepted delta for the final parser-specialization pass on that reclaimed wrapper state: `1,007,866 -> 1,007,224` (`-642`)
+    - specialize only the initial commitment parser by arity (`_parseFixedCommitment16x2`) while keeping both rounds on the fixed-two-sample generic helper
+    - this dominates the alternative round-0-only specialization at the same deployable size class
+  - current local-diff verifier state after that parser pass:
+    - same as the current snapshot above
 
 - Current phase-level profiler snapshot (from `test/WhirGasProfile.t.sol`, same fixed 16-variable, 2-round fixture family):
-  - `setup`: `35,678`
-  - `initial sumcheck`: `21,986`
-  - `round0 parse`: `24,155`
-  - `round0 STIR`: `191,948`
-  - `round0 sumcheck`: `22,617`
-  - `round1 parse`: `18,280`
-  - `round1 STIR`: `157,800`
-  - `round1 sumcheck`: `25,925`
-  - `observe finalPoly`: `12,274`
-  - `final STIR`: `149,195`
+  - `setup`: `28,695`
+  - `initial sumcheck`: `22,001`
+  - `round0 parse`: `19,411`
+  - `round0 STIR`: `190,633`
+  - `round0 sumcheck`: `22,607`
+  - `round1 parse`: `14,905`
+  - `round1 STIR`: `156,779`
+  - `round1 sumcheck`: `25,924`
+  - `observe finalPoly`: `12,283`
+  - `final STIR`: `148,526`
   - `final select`: `0`
-  - `final sumcheck`: `22,168`
-  - `constraint fixed select`: `131,840`
-  - `constraint initial`: `52,050`
-  - `constraint evaluation total`: `183,890`
-  - `final value check`: `11,170`
-  - `sum of measured phases`: `877,086`
+  - `final sumcheck`: `22,179`
+  - `constraint fixed select`: `133,697`
+  - `constraint initial`: `51,439`
+  - `constraint evaluation total`: `185,136`
+  - `final value check`: `11,179`
+  - `sum of measured phases`: `860,258`
+  - note: the raw fixed-select entrypoint lowered canonical verifier gas even though the harness-local `constraint fixed select` slice increased; the measured win comes from removing production-side round-constraint materialization outside the slice, not from cheaper select arithmetic itself
+  - note: the later fixed-config parser/control-path wins, the explicit size-first rollback, the fixed two-round wrapper unroll, the subsequent size-first wrapper reclaim, and the final initial-only parser specialization mostly do not move these phase slices, because the current `gasleft()` harness boundaries do not isolate the production-only fixed-shape statement validation, parser specialization, and wrapper control-path work. The best high-level harness proxy for those wins is `testProfileWhirVerify`, which moved from `930,298` earlier in the pass sequence down to `920,978` at the minimum-gas parser-specialized point, `922,856` at the explicit size-first point, `917,171` after the accepted fixed two-round wrapper pass, `916,538` after the accepted size-first wrapper reclaim, and `915,896` after the accepted initial-only parser specialization.
 
 - Current STIR internal breakdown instrumentation (from `test/WhirGasProfile.t.sol`, same fixed 16-variable, 2-round fixture family):
   - the profiler now splits each STIR call into `sampleQueries`, `leafHashing`, `merkleReduction`, `pow`, `rowFolding`, and residual `overhead`
-  - Round 0 (`9` queries, depth `18`, base rows): total `291,365`
-    - `sampleQueries`: `9,297`
-    - `leafHashing`: `20,811`
-    - `merkleReduction`: `169,286`
+  - Round 0 (`9` queries, depth `18`, base rows): total `290,137`
+    - `sampleQueries`: `9,296`
+    - `leafHashing`: `20,810`
+    - `merkleReduction`: `168,064`
     - `pow`: `18,487`
     - `rowFolding`: `67,950`
-    - `overhead`: `5,534`
-  - Round 1 (`6` queries, depth `17`, ext4 rows): total `221,890`
-    - `sampleQueries`: `6,438`
-    - `leafHashing`: `21,940`
-    - `merkleReduction`: `112,189`
+    - `overhead`: `5,530`
+  - Round 1 (`6` queries, depth `17`, ext4 rows): total `220,843`
+    - `sampleQueries`: `6,436`
+    - `leafHashing`: `21,938`
+    - `merkleReduction`: `111,155`
     - `pow`: `11,590`
     - `rowFolding`: `64,740`
-    - `overhead`: `4,993`
-  - Final STIR (`5` queries, depth `16`, ext4 rows): total `181,328`
-    - `sampleQueries`: `5,666`
-    - `leafHashing`: `18,297`
-    - `merkleReduction`: `90,118`
+    - `overhead`: `4,984`
+  - Final STIR (`5` queries, depth `16`, ext4 rows): total `181,777`
+    - `sampleQueries`: `5,665`
+    - `leafHashing`: `18,295`
+    - `merkleReduction`: `90,574`
     - `pow`: `8,988`
     - `rowFolding`: `53,815`
-    - `overhead`: `4,444`
+    - `overhead`: `4,440`
   - These measurements replace earlier rough estimates. The remaining dominant STIR costs are merkleReduction first and rowFolding second (both already assembly-optimized); query generation, pow, and residual overhead are materially smaller.
 
 - Current focused STIR detail profiling (from `test/WhirStirDetailProfile.t.sol`):
-  - final STIR materialization: `149,222`
+  - final STIR materialization: `148,526`
   - final STIR check-only: `0`
-  - Round 0 frontier: `frontierInit = 22,051`, `merkleLoopOnly = 164,867`
-  - Round 1 frontier: `frontierInit = 22,765`, `merkleLoopOnly = 109,065`
-  - Final frontier: `frontierInit = 19,094`, `merkleLoopOnly = 89,816`
+  - Round 0 frontier: `frontierInit = 22,051`, `merkleLoopOnly = 162,211`
+  - Round 1 frontier: `frontierInit = 22,760`, `merkleLoopOnly = 107,085`
+  - Final frontier: `frontierInit = 19,026`, `merkleLoopOnly = 87,853`
 
-### Assessed future optimizations (ranked by net tx-gas impact)
+### Assessed protocol-level / proof-format optimizations (future work plus one historical experiment)
+
+This section is intentionally about changes beyond the verifier-only passes documented above. Most of the non-protocol structural optimizations that were previously "future" have already been implemented in the current branch; what remains here is protocol work, proof-format work, or historical experiment data kept for reference.
 
 These are proof-format or protocol-level changes that go beyond pure Solidity micro-optimization. Each was assessed against real fixture data (16-var, 2-round, foldingFactor=4, queries 9/6/5, depths 18/17/16). Current fixture has 270 Merkle decommitments (123 + 81 + 66) and 344 total compress calls (270 decomm-backed + 37 in-frontier merges + 37 dedup events).
 

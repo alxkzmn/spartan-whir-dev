@@ -16,7 +16,6 @@ todos:
     status: pending
   - id: stage4
     content: "Stage 4: Standalone WHIR verifier -- quartic passes first, then octic, with the main WHIR optimization pass"
-    content: "Stage 4: Standalone WHIR verifier -- quartic passes first, then octic, with the main WHIR optimization pass"
     status: pending
   - id: stage5
     content: "Stage 5: Full Spartan verifier (outer/inner sumcheck + circuit-specific generated constants)"

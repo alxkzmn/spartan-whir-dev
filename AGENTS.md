@@ -2,13 +2,11 @@
 
 ## Current Work: Solidity Verifier for Spartan-WHIR
 
-The primary active task is building a Solidity (EVM) verifier for the Spartan-WHIR SNARK. The full implementation plan lives at:
+The primary active task is building a Solidity (EVM) verifier for the Spartan-WHIR SNARK. The canonical root document lives at:
 
-- **`./solidity_verifier_plan.md`** -- this is the canonical, reviewed plan.
+- **`./README.md`** -- this is the canonical, reviewed root document for the verifier work. If you need to make changes to the project plan, always write them to `./README.md` so it stays current.
 
-If you need to make changes to the plan, copy `./solidity_verifier_plan.md` into your own planning system first, then modify from there. Always write changes back to `./solidity_verifier_plan.md` so the workspace copy stays current.
-
-Read the plan file before starting any implementation work. It contains frozen ABI schemas, locked architectural decisions, stage sequencing, source-of-truth boundaries, and risk notes that have been reviewed across multiple rounds of expert review.
+Read the root README before starting any implementation work. It contains frozen ABI schemas, locked architectural decisions, stage sequencing, source-of-truth boundaries, and risk notes that have been reviewed across multiple rounds of expert review.
 
 ## Workspace Layout
 
@@ -40,29 +38,47 @@ This workspace contains several sibling projects. They serve different roles:
 
 ### Transcript / Fiat-Shamir
 
-- Uses a local canonical Keccak challenger in `spartan-whir`, API-compatible with `SerializingChallenger32<KoalaBear, HashChallenger<u8, Keccak256Hash, 32>>`.
-- Field elements are now observed canonically as `as_canonical_u32().to_le_bytes()`.
+- `spartan-whir` defines its own Keccak challenger (`CanonicalSerializingChallenger32` in `canonical_challenger.rs`) that observes field elements in canonical form (`as_canonical_u32().to_le_bytes()`). It satisfies the same `FieldChallenger` trait that `whir-p3` requires, without modifying vendored Plonky3.
 - Spartan domain separator: `keccak256(DomainSeparator::to_bytes())` produces a 32-byte hash that is observed into the challenger. The raw 76-byte preimage is NOT observed directly.
 - WHIR domain separator: a `Vec<F>` pattern of field elements observed via `challenger.observe_slice(...)`.
 - Transcript byte-level compatibility between Rust and Solidity is the single highest correctness risk. If the Solidity challenger produces even one different byte during observe or sample operations, every subsequent challenge will diverge and the proof will be rejected.
 
 ### Proof format
 
-- The Rust proof is encoded via `codec_v1.rs` as an `SPWB` binary blob.
-- For the Solidity verifier, the first correctness path uses typed ABI encoding (`abi.encode`/`abi.decode`), not the binary blob.
-- The current `stage4` standalone-WHIR verifier also has a fixed-shape quartic blob format (`WHRB`) with two Solidity paths:
-  - a decode-and-delegate wrapper over the typed verifier
-  - a fixed-shape native verifier that consumes the blob directly from calldata
-- The current accepted `WHRB` layout is mixed on purpose:
-  - transcript-fed OOD answers, sumcheck polynomial evaluations, and PoW witnesses use transcript-native canonical little-endian bytes
-  - commitments, decommitments, Merkle query rows, statement data, and the final polynomial stay on the existing Merkle/arithmetic-friendly layout
-- Full-Spartan `SPWB` blob support is still later-stage work; do not confuse the current fixed-shape standalone blob with the general `SPWB` format.
+- The Rust proof is encoded via `codec_v1.rs` as the full Spartan binary blob format.
+- The standalone-WHIR Solidity verifier has three paths:
+  - **Native blob verifier** (`WhirBlobVerifierNative4`): production path. Reads the fixed-shape quartic blob directly from calldata.
+  - **Typed ABI verifier** (`WhirVerifier4`): parity/test path. Uses `abi.encode`/`abi.decode` for debuggability.
+  - **Blob decode-and-delegate wrapper** (`WhirBlobVerifier4`): decodes the blob into typed structs, then delegates to the typed verifier.
+- The blob layout mixes encoding conventions on purpose (transcript-native LE for sections fed to the challenger, big-endian or packed for Merkle sections). Don't reorganize for consistency — the layout is optimized for gas. Any changes need benchmarking.
+- Full-Spartan blob support (encoding the outer Spartan proof + WHIR together) is still later-stage work. The current blob is standalone-WHIR only.
 
 ## Rules for This Workspace
+
+### What belongs in AGENTS.md
+
+This file should contain **gotchas, non-obvious decisions, and tool/workflow instructions** — things that prevent the agent from repeating past mistakes or rediscovering working patterns. It should NOT contain:
+
+- Measurements, gas numbers, test counts, or other facts about current state that change after every optimization or refactor. Use the root `README.md` for that, or provide commands to obtain them.
+- Descriptions of what the code does (the code is the source of truth for that).
+
+Exception: temporary tool issues that need workarounds. These should include instructions for how to detect when the issue is fixed, and a note to update this file when it is (e.g., "Foundry flamegraphs crash on deep call trees — if this stops happening, remove this caveat").
+
+### Use `####` headers in user-facing documents
+
+Markdown files shared with humans (READMEs, design docs) should use 4th-level headers (`####`) to break up long `###` sections. This makes it possible to link someone directly to a specific subsection instead of saying "scroll down a bit." Do not avoid `####` out of style preference.
+
+### Do not invent abbreviations or acronyms
+
+Use existing names from the codebase. Do not coin new abbreviations for blob formats, verifier paths, or protocol variants. Invented acronyms are hard to search for, confuse readers, and never appear in the actual code.
 
 ### Verification-facing changes are protocol surface
 
 Any change to transcript ordering, proof encoding, digest layout, Merkle hashing, or domain separator construction will break the Solidity verifier if not mirrored there. These are protocol-level changes. When making such a change, state explicitly which Solidity components are affected and what needs to be updated.
+
+### Dated "current state" sections must keep their dates in sync
+
+If a section title or label says "current" and also includes a date, treat that date as part of the maintained content. When you update the contents of that section, update the date too. Do not leave a stale date attached to fresh numbers or conclusions.
 
 ### Exporter runs: always use release mode
 
@@ -99,7 +115,7 @@ The Solidity verifier architecture supports both extension degrees from the star
 
 `spartan-whir` currently hardcodes `FoldingFactor::Constant(...)` when building the WHIR config (see `whir_pcs.rs` line 311). The Solidity plan now targets a **schedule-generic verifier core** from the first implementation: the runtime-config verifier should consume the derived per-round schedule from exported config data instead of assuming a constant folding factor in code.
 
-Changing Rust to `ConstantFromSecondRound` is a protocol-surface change: it changes the derived round schedule, WHIR Fiat-Shamir pattern, and fixed-config verifier constants. Do not change the folding-factor variant without following the schedule-tuning process in `./solidity_verifier_plan.md` and regenerating all affected fixtures/generated code.
+Changing Rust to `ConstantFromSecondRound` is a protocol-surface change: it changes the derived round schedule, WHIR Fiat-Shamir pattern, and fixed-config verifier constants. Do not change the folding-factor variant without following the schedule-tuning process in `./README.md` and regenerating all affected fixtures/generated code.
 
 ## Gas Profiling with Forge Flamegraphs
 
@@ -112,32 +128,7 @@ Foundry supports:
 
 Both generate SVGs in `./sol-spartan-whir/cache/`.
 
-### Foundry Bug: Large Test Crash
-
-In the current toolchain, both `--flamegraph` and `--flamechart` can crash with `capacity overflow` or `memory allocation of ... bytes failed` on deep verifier traces. The crash occurs _after_ the test passes, during trace decoding. This is a Foundry bug, not an OOM in verifier code.
-
-This is **not** a simple gas threshold. It is shape-dependent:
-
-- some `~1.5M` gas tests work (`testProfileStirBreakdown`)
-- some `~0.75M` gas tests still crash (`testFlameRound0Stir`)
-- the common factor is deep / complex decoded call trees, especially Merkle-heavy paths
-
-**Tests that crash:**
-
-- `testVerifyQuarticWhirSuccessFixture` (~1.9M gas)
-- `testProfileFullBreakdown` (~1.9M gas)
-- `testFlameRound0Stir`, `testFlameRound1Stir`, `testFlameFinalStir` (isolated STIR rounds with deep Merkle call trees)
-- `testFlameConstraintEvaluation` (~1.9M gas)
-
-**Tests that work:**
-
-- `testProfileStirBreakdown` (~1.5M gas) -- combined STIR profile, the largest stable flamegraph/flamechart target so far
-- `testFlameSyntheticEqConstraint` (~330k gas) -- eq constraint only
-- `testFlameSyntheticSelectConstraint` (~251k gas) -- select constraint only
-
-**Workaround:** Break profiling code into smaller focused tests. If a test crashes, it's too deep — split it or use a synthetic test with fewer queries/depth.
-
-**Practical advice:** Prefer `--flamegraph` first. In practice it has been more useful and at least as stable as `--flamechart` on the current hotspot tests.
+**Foundry flamegraph caveat:** `--flamegraph` and `--flamechart` can crash on tests with deep call trees (Foundry bug in trace decoding, not an OOM). If a test crashes, use a smaller/focused test. Prefer `--flamegraph` over `--flamechart` — it's more useful and more stable.
 
 ### Reading SVGs Programmatically
 
@@ -176,47 +167,26 @@ The file contains two contracts:
   - `testProfileStirMicro` — logs micro-benchmark results
   - `testGasWhirVerifyFixed` — canonical single-number gas measurement
 
-### Interpreting Results
+### How to get gas numbers
 
-**Key cost relationships (16-var, 2-round, foldingFactor=4 fixture):**
+- **Single canonical gas number**: `forge test --match-test testGasWhirVerifyFixed -vv`
+- **Phase-level breakdown** (setup, sumchecks, STIR, constraints, final check): `forge test --match-test testProfileFullBreakdown -vv`
+- **Per-round STIR internals** (sampleQueries, leafHashing, merkleReduction, pow, rowFolding): `forge test --match-test testProfileStirBreakdown -vv`
+- **Micro-benchmarks** (hashLeafBaseSlice, compressNode, KoalaBear.pow, sampleStirQueries): `forge test --match-test testProfileStirMicro -vv`
 
-These numbers move frequently during verifier optimization work. Treat the table below as a rough shape guide only; the current canonical baseline lives in `./solidity_verifier_plan.md` and `testGasWhirVerifyFixed`.
+Do not hardcode gas numbers in AGENTS.md — they go stale after every optimization. Always measure.
 
-| Component           | Gas     | Notes                                                                            |
-| ------------------- | ------- | -------------------------------------------------------------------------------- |
-| Total verify        | ~1,009k | `testGasWhirVerifyFixed` on the current deployable local-diff baseline           |
-| STIR (all 3 rounds) | ~499k   | From current full-breakdown slices: `194,051 + 158,141 + 147,239`                |
-| Constraint eval     | ~185k   | Current fixed-select + initial-constraint total                                  |
-| Sumchecks           | ~91k    | Current full-breakdown total across initial, round0, round1, and final sumchecks |
-| Setup               | ~29k    | observePattern + parseCommitment on the current harness snapshot                 |
+### Flamegraph vs `gasleft()` profiling
 
-**Per-query STIR costs:**
+1. Run `gasleft()` tests first (`testProfile*`) to identify which phase to investigate.
+2. Then flamegraph that phase to see function-level breakdown _within_ it. Flamegraphs are good for finding hidden overhead the profiling harness doesn't decompose.
+3. Use `--flamechart` only when you already know the hotspot and need to understand call sequencing.
 
-- Row folding: ~7.5-10.8k/query (fold schedule varies by round) — already assembly-optimized
-- Merkle reduction: ~7.7-8.6k/query (linear auth path, inline keccak) — already assembly-optimized
-- Leaf hashing: 2.3k (base) or 3.7k (ext4) per query — already assembly-optimized
-
-### Flamegraph vs `gasleft()` Profiling
-
-- **`gasleft()` profiling** (the `testProfile*` tests): Precise per-phase gas. Best for tracking optimization progress and measuring specific changes. Run with `forge test --match-test <name> -vv`.
-- **Flamegraph**: Shows function-level breakdown _within_ a phase. Best for finding unexpected costs (e.g., `_maskDigestTail` at 40k or `_clampEffectiveDigestBytes` at 17k — pure overhead discovered only via flamegraph). Use when you need to know _why_ a phase is expensive.
-- **Flamechart**: Shows the chronological call tree. Use when the hotspot is already known and you want to understand sequencing or caller/callee nesting.
-
-Always run `gasleft()` tests first to identify which phase to investigate, then flamegraph that phase (or the largest stable test covering it).
-
-### Minimize Profiling Noise
-
-Focused profiling targets are much better than full verifier traces.
-
-- Tests that call `_loadSuccessFixture()` include harness noise in the graph. On some focused tests this is still 5%–25% of total gas.
-- Prefer synthetic or harness-level tests that isolate one verifier phase.
-- If a profiling target is still too noisy, create a dedicated test that preloads data in `setUp()` or hardcodes the minimal inputs needed for that phase.
-- `testFlameSyntheticEqConstraint` and `testFlameSyntheticSelectConstraint` are currently the cleanest flamegraph targets for constraint work.
-- `testProfileStirBreakdown` is currently the best stable target for STIR analysis when the isolated STIR flamegraphs crash.
+For cleaner flamegraphs, prefer synthetic or harness-level tests that isolate one verifier phase. Tests that call `_loadSuccessFixture()` include 5–25% harness noise.
 
 ### Optimization Validation Workflow
 
-1. Run `forge test` — all 108 tests must pass
+1. Run `forge test` — the full Solidity suite must pass
 2. Run `forge test --match-test testGasWhirVerifyFixed -vv` — get the single canonical gas number
 3. Run `forge test --match-test testProfileFullBreakdown -vv` — verify phase-level breakdown
 4. Compare against previous numbers to confirm the delta matches expectations
@@ -228,58 +198,30 @@ The Solidity compiler with `via_ir = true` (used in this project) is aggressive 
 - Low-level ext4 mul rewrite: expected -50k, actual **+208k** (compiler was already optimizing the high-level version better)
 - Batch sumcheck validation: expected -5k, actual **+4.7k** (extra memory allocation outweighed saved checks)
 
-### Cross-Verifier Gas Comparison (sol-spartan-whir vs sol-whir)
-
-The table below is a historical benchmark snapshot, not the live baseline. Re-run the scripts if you need current tx-gas numbers.
-
-Both verifiers: 80-bit security, `foldingFactor = 4`, `numVariables = 16`.
-
-| Metric               | sol-spartan-whir (WHIR-only) | sol-whir (BN254) |
-| -------------------- | ---------------------------- | ---------------- |
-| Execution gas        | 986,923                      | 677,011          |
-| Total tx gas         | 1,118,048                    | 1,135,052        |
-| Calldata + intrinsic | 261,208                      | 435,876          |
-
-sol-spartan-whir has higher execution gas (~46%) but **lower total tx gas** (-1.5%) because smaller field elements yield less calldata.
-
-**How to measure total tx gas:**
-
-Scripts: `sol-spartan-whir/script/MeasureTxGas.s.sol` (wrapper tx), `sol-spartan-whir/script/WhirTxBenchmark.s.sol` (direct tx), `sol-whir/script/Verify.s.sol` (sol-whir baseline).
-
-Step-by-step commands (run from `sol-spartan-whir/`):
+**How to measure total tx gas** (run from `sol-spartan-whir/`):
 
 ```bash
-# 1. Start anvil in a background terminal
-anvil --silent          # isBackground=true
+# 1. Start anvil
+anvil --silent          # mode=async
 
-# 2. Direct tx measurement (WhirTxBenchmark.s.sol — single contract, no --tc needed)
-forge script script/WhirTxBenchmark.s.sol \
+# 2. Run the benchmark script (native blob verifier)
+forge script script/WhirBlobNativeTxBenchmark.s.sol \
   --rpc-url http://127.0.0.1:8545 --broadcast --slow \
   --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 
-# 3. Wrapper tx measurement (MeasureTxGas.s.sol — two contracts, needs --tc)
-forge script script/MeasureTxGas.s.sol --tc MeasureTxGas \
-  --rpc-url http://127.0.0.1:8545 --broadcast --slow \
-  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+# 3. Parse results
+python3 parse_tx_gas.py direct
 
-# 4. Kill anvil when done
+# 4. Kill anvil
 pkill -f "anvil"
 ```
 
-Key gotchas:
+`parse_tx_gas.py` prints total tx gas, intrinsic, calldata gas (with byte counts), and execution remainder. Supports `direct` (EOA → verifier) and `wrapper` (EOA → wrapper → verifier) modes.
 
-- **`--private-key` is required.** Without it, Foundry uses `vm.startBroadcast()` with no sender, which silently produces empty receipts and exits with "You seem to be using Foundry's default sender." Use anvil's default account 0 key shown above.
-- **`--tc MeasureTxGas`** is required for `MeasureTxGas.s.sol` because it contains two contracts (`VerifyWrapper` and `MeasureTxGas`). `WhirTxBenchmark.s.sol` has only one `Script` contract so `--tc` is not needed.
-- **`--slow`** serializes transactions — necessary for correct receipt ordering.
+Other benchmark scripts: `WhirTxBenchmark.s.sol` (typed verifier), `MeasureTxGas.s.sol` (wrapper tx — needs `--tc MeasureTxGas`).
 
-Reading results from broadcast JSON:
-
-- Direct tx: `broadcast/WhirTxBenchmark.s.sol/31337/run-latest.json` — Receipt[1] (Receipt[0] is the CREATE).
-- Wrapper tx: `broadcast/MeasureTxGas.s.sol/31337/run-latest.json` — Receipt[2] (Receipt[0] = WhirVerifier4 CREATE, Receipt[1] = VerifyWrapper CREATE, Receipt[2] = verifyAndStore CALL).
-- `gasUsed` is hex-encoded in receipts; convert with `int(value, 16)`.
-- The `WhirTxBenchmark` script also logs calldata breakdown (zero/nonzero bytes, calldata gas) to console during the run. For the wrapper calldata breakdown, extract the input bytes from `transactions[2].transaction.input` in the broadcast JSON and count zero/nonzero bytes.
-- **Automated parsing**: run `python3 parse_tx_gas.py` (in `sol-spartan-whir/`) after both broadcasts. It parses the broadcast artifacts and prints full gas breakdowns including calldata byte counts, execution remainders, and wrapper overhead. Supports `python3 parse_tx_gas.py direct` or `python3 parse_tx_gas.py wrapper` for individual results.
+Key gotcha: **`--private-key` is required.** Without it, Foundry silently produces empty receipts.
 
 ## Implementation Stages (Summary)
 
-See `./solidity_verifier_plan.md` for full details.
+See `./README.md` for full details.

@@ -40,7 +40,8 @@ This workspace contains several sibling projects. They serve different roles:
 
 ### Transcript / Fiat-Shamir
 
-- Uses Keccak-based challenger: `SerializingChallenger32<KoalaBear, HashChallenger<u8, Keccak256Hash, 32>>`.
+- Uses a local canonical Keccak challenger in `spartan-whir`, API-compatible with `SerializingChallenger32<KoalaBear, HashChallenger<u8, Keccak256Hash, 32>>`.
+- Field elements are now observed canonically as `as_canonical_u32().to_le_bytes()`.
 - Spartan domain separator: `keccak256(DomainSeparator::to_bytes())` produces a 32-byte hash that is observed into the challenger. The raw 76-byte preimage is NOT observed directly.
 - WHIR domain separator: a `Vec<F>` pattern of field elements observed via `challenger.observe_slice(...)`.
 - Transcript byte-level compatibility between Rust and Solidity is the single highest correctness risk. If the Solidity challenger produces even one different byte during observe or sample operations, every subsequent challenge will diverge and the proof will be rejected.
@@ -52,6 +53,9 @@ This workspace contains several sibling projects. They serve different roles:
 - The current `stage4` standalone-WHIR verifier also has a fixed-shape quartic blob format (`WHRB`) with two Solidity paths:
   - a decode-and-delegate wrapper over the typed verifier
   - a fixed-shape native verifier that consumes the blob directly from calldata
+- The current accepted `WHRB` layout is mixed on purpose:
+  - transcript-fed OOD answers, sumcheck polynomial evaluations, and PoW witnesses use transcript-native canonical little-endian bytes
+  - commitments, decommitments, Merkle query rows, statement data, and the final polynomial stay on the existing Merkle/arithmetic-friendly layout
 - Full-Spartan `SPWB` blob support is still later-stage work; do not confuse the current fixed-shape standalone blob with the general `SPWB` format.
 
 ## Rules for This Workspace
@@ -180,10 +184,10 @@ These numbers move frequently during verifier optimization work. Treat the table
 
 | Component           | Gas     | Notes                                                                            |
 | ------------------- | ------- | -------------------------------------------------------------------------------- |
-| Total verify        | ~1,007k | `testGasWhirVerifyFixed` on the current deployable local-diff baseline           |
-| STIR (all 3 rounds) | ~496k   | From current full-breakdown slices: `190,633 + 156,779 + 148,526`                |
+| Total verify        | ~1,009k | `testGasWhirVerifyFixed` on the current deployable local-diff baseline           |
+| STIR (all 3 rounds) | ~499k   | From current full-breakdown slices: `194,051 + 158,141 + 147,239`                |
 | Constraint eval     | ~185k   | Current fixed-select + initial-constraint total                                  |
-| Sumchecks           | ~93k    | Current full-breakdown total across initial, round0, round1, and final sumchecks |
+| Sumchecks           | ~91k    | Current full-breakdown total across initial, round0, round1, and final sumchecks |
 | Setup               | ~29k    | observePattern + parseCommitment on the current harness snapshot                 |
 
 **Per-query STIR costs:**

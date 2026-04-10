@@ -510,22 +510,35 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
     - combined initial + round-0 specialization (`_parseFixedCommitment16x2` + `_parseFixedCommitment12x2`): lowered canonical gas to `1,006,406` but increased deployed bytecode to about `24,759` bytes, exceeding EIP-170; reverted as non-deployable
   - deleting dead source-only parser helpers (`_parseFixedCommitment12x2`, `_parseFixedCommitment8x2`) after settling on the initial-only parser specialization: no change to canonical gas (`1,007,224`) and no change to deployed `WhirVerifier4` bytecode (`24,455` bytes), confirming they were already absent from the live runtime
 
-- Current local-diff deployable snapshot (9 April 2026):
+- Current local-diff deployable snapshot (10 April 2026):
   - `foundry.toml`: `optimizer_runs = 833`
-  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,007,179`
-  - `WhirVerifier4.testVerifyQuarticWhirSuccessFixture()`: `1,007,025`
-  - deployed bytecode from `forge inspect src/whir/WhirVerifier4.sol:WhirVerifier4 deployedBytecode | wc -c`: `48,825` hex chars, about `24,412` bytes, so deployable under EIP-170 with about `164` bytes of headroom
+  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,008,830`
+  - `WhirVerifier4.testVerifyQuarticWhirSuccessFixture()`: `1,008,676`
+  - deployed bytecode from `forge inspect src/whir/WhirVerifier4.sol:WhirVerifier4 deployedBytecode | wc -c`: `48,757` hex chars, about `24,378` bytes, so deployable under EIP-170 with about `198` bytes of headroom
   - current fixed-shape standalone-WHIR blob state on this same branch:
-    - success blob fixture (`quartic_whir_success.blob`): `10,032` bytes
+    - success blob fixture (`quartic_whir_success.blob`): `10,152` bytes
     - decode-and-delegate wrapper path:
-      - `WhirBlobVerifier4.testGasWhirVerifyBlobFixed()`: `1,190,987`
+      - `WhirBlobVerifier4.testGasWhirVerifyBlobFixed()`: `1,210,200`
       - useful for malformed-blob rejection and calldata-size benchmarking, but not an execution-gas win
     - native stage4 blob path:
-      - `WhirBlobVerifierNative4.testGasWhirVerifyBlobNativeFixed()`: `936,013`
-      - `WhirBlobVerifierNative4.testVerifyQuarticWhirSuccessBlobNative()`: `935,991`
-      - deployed bytecode from `forge inspect src/whir/WhirBlobVerifierNative4.sol:WhirBlobVerifierNative4 deployedBytecode | wc -c`: `39,231` hex chars, about `19,615` bytes, so deployable under EIP-170 with about `4,961` bytes of headroom
+      - `WhirBlobVerifierNative4.testGasWhirVerifyBlobNativeFixed()`: `927,944`
+      - `WhirBlobVerifierNative4.testVerifyQuarticWhirSuccessBlobNative()`: `927,922`
+      - deployed bytecode from `forge inspect src/whir/WhirBlobVerifierNative4.sol:WhirBlobVerifierNative4 deployedBytecode | wc -c`: `39,503` hex chars, about `19,751` bytes, so deployable under EIP-170 with about `4,825` bytes of headroom
       - current best stage4 verifier execution path, and the main recommended deployment target on this branch, because it verifies directly from the fixed-shape blob without materializing typed proof structs
+      - current accepted blob-layout scope:
+        - transcript-native canonical little-endian bytes for initial/per-round OOD answers, all sumcheck polynomial evaluations, round/final PoW witnesses, and round1 sumcheck PoW witnesses
+        - commitments, decommitments, Merkle query rows, statement data, and the final polynomial remain on the existing Merkle/arithmetic-friendly layout
   - the accepted deltas below are kept as a historical progression from earlier staging points to this current baseline
+  - accepted protocol-surface transcript pass for stage4:
+    - replace the Rust-side `SerializingChallenger32` alias in `spartan-whir` with a local API-compatible canonical challenger that observes field elements as `as_canonical_u32().to_le_bytes()`
+    - keep `whir-p3` unchanged
+    - update exporter transcript traces and generated fixed-config `observePattern` constants to the same canonical byte rule
+    - remove Montgomery conversion from the Solidity challenger while keeping the proof/blob byte-order conversion needed by the existing layouts
+    - transcript parity and all stage4 typed/blob suites remain green
+    - immediate measured post-pass baselines:
+      - typed verifier: `1,007,179 -> 1,008,830` (`+1,651`)
+      - blob wrapper: `1,190,987 -> 1,194,448` (`+3,461`)
+      - native blob: `937,595 -> 937,394` (`-201`)
   - accepted delta for the lifetime-split non-protocol pass: `1,049,006 -> 1,040,144` (`-8,862`)
     - compact live-path constraint split: `1,049,006 -> 1,041,352` (`-7,654`)
     - raw frontier allocation in `_computeRootFromFlatRows20`: `1,041,352 -> 1,040,144` (`-1,208`)
@@ -586,6 +599,33 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
     - `936,654 -> 935,792` (`-862`) on the pre-parity-test measurement harness
       - split the hot blob Merkle root builder by row kind and fast-path the native verifier's fixed `rowLen = 16` shape
       - this removes the remaining generic stride / kind plumbing from `MerkleVerifier._computeRootFromFlatRows20Blob` on the native path and also trims native runtime bytecode `40,397 -> 39,231` hex chars
+  - accepted stage4 transcript-native blob rewrite after the canonical challenger pass:
+    - rewrite `WHRB` v1 in place so the transcript-fed sections that are not Merkle-heavy or arithmetic-hot are emitted in transcript-native canonical little-endian form
+    - accepted moved sections:
+      - initial/per-round OOD answers
+      - all sumcheck polynomial evaluations
+      - round/final PoW witnesses
+      - round1 sumcheck PoW witnesses
+    - intentionally not moved:
+      - commitments and decommitments
+      - Merkle query rows
+      - statement point/evaluation
+      - final polynomial
+    - rationale for the exclusions:
+      - commitments/decommitments and query rows are Merkle-hot, not transcript-hot
+      - statement data is not transcript-observed on the standalone WHIR path
+      - the final polynomial is arithmetic-hot (`hornerBaseBlob` / final-value evaluation) and would pay repeated decode costs if moved
+    - naive split implementation was correct but regressed native blob gas slightly (`937,394 -> 937,808`) because it only moved the byte-swaps from `observe` into `decode`
+    - accepted follow-up was to collapse LE observe + decode + validation back into combined native helpers:
+      - `KeccakChallenger.observeReadValidatedPackedExt4Le(...)`
+      - `KeccakChallenger.observeReadValidatedPackedExt4LePair(...)`
+    - final accepted result vs the post-canonical-challenger native baseline:
+      - native blob: `937,394 -> 927,944` (`-9,450`)
+      - wrapper blob: `1,194,448 -> 1,210,200` (`+15,752`)
+      - typed verifier unchanged from the post-canonical-challenger baseline
+    - conclusion:
+      - the stage4 native blob path benefits materially
+      - the wrapper remains a reference / malformed-blob / calldata-benchmark path and is not an execution target
   - rejected follow-up native-blob experiments after the current baseline:
     - exact 4-round blob sumcheck specializations (`_verifySumcheckBlob4NoPow`, `_verifySumcheckBlob4Pow4`): regressed native blob gas to `954,400`
     - compact OOD / univariate-only initial path on the native blob verifier: regressed badly to `970,580`
@@ -602,23 +642,23 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
     - same as the current snapshot above
 
 - Current phase-level profiler snapshot (from `test/WhirGasProfile.t.sol`, same fixed 16-variable, 2-round fixture family):
-  - `setup`: `28,695`
-  - `initial sumcheck`: `22,001`
-  - `round0 parse`: `19,411`
-  - `round0 STIR`: `190,633`
-  - `round0 sumcheck`: `22,607`
-  - `round1 parse`: `14,905`
-  - `round1 STIR`: `156,779`
-  - `round1 sumcheck`: `25,924`
-  - `observe finalPoly`: `12,283`
-  - `final STIR`: `148,526`
+  - `setup`: `28,759`
+  - `initial sumcheck`: `21,553`
+  - `round0 parse`: `19,299`
+  - `round0 STIR`: `194,051`
+  - `round0 sumcheck`: `21,983`
+  - `round1 parse`: `14,793`
+  - `round1 STIR`: `158,141`
+  - `round1 sumcheck`: `25,560`
+  - `observe finalPoly`: `11,387`
+  - `final STIR`: `147,239`
   - `final select`: `0`
-  - `final sumcheck`: `22,179`
+  - `final sumcheck`: `21,555`
   - `constraint fixed select`: `133,697`
   - `constraint initial`: `51,439`
   - `constraint evaluation total`: `185,136`
   - `final value check`: `11,179`
-  - `sum of measured phases`: `860,258`
+  - `sum of measured phases`: `860,635`
   - note: the raw fixed-select entrypoint lowered canonical verifier gas even though the harness-local `constraint fixed select` slice increased; the measured win comes from removing production-side round-constraint materialization outside the slice, not from cheaper select arithmetic itself
   - note: the later fixed-config parser/control-path wins, the explicit size-first rollback, the fixed two-round wrapper unroll, the subsequent size-first wrapper reclaim, and the final initial-only parser specialization mostly do not move these phase slices, because the current `gasleft()` harness boundaries do not isolate the production-only fixed-shape statement validation, parser specialization, and wrapper control-path work. The best high-level harness proxy for those wins is `testProfileWhirVerify`, which moved from `930,298` earlier in the pass sequence down to `920,978` at the minimum-gas parser-specialized point, `922,856` at the explicit size-first point, `917,171` after the accepted fixed two-round wrapper pass, `916,538` after the accepted size-first wrapper reclaim, and `915,896` after the accepted initial-only parser specialization.
 
@@ -709,13 +749,28 @@ Each eliminated query saves ~32,000–37,000 verifier gas. Current schedule (9/6
 
 See the Schedule Tuning Pass section below for the evaluation process.
 
-**4. Transcript-native proof encoding (encoding change)**
+**4. Transcript-native proof encoding (partially implemented on the Stage 4 blob path)**
 
-Current transcript observation involves packing/unpacking field elements into challenger bytes. A binary/blob layout where proof data is already in transcript-native byte order could reduce observe overhead.
+This is no longer purely future work.
 
-Real savings are ~`20,000–40,000` execution gas (not the 40k–80k initially estimated — the ext4 observation count is ~4–8, not 50+). Calldata impact depends on binary wrapper design.
+Current accepted state:
 
-Confidence: medium-low. This overlaps with the Stage 4 standalone blob path and the later Stage 7 full-Spartan blob path. The transcript byte-level compatibility risk (highest correctness risk in the project) makes this a careful-execution item.
+- the Rust challenger and Solidity challenger now use canonical field bytes for Fiat-Shamir
+- the fixed-shape stage4 `WHRB` blob now uses transcript-native canonical little-endian bytes for:
+  - initial/per-round OOD answers
+  - all sumcheck polynomial evaluations
+  - round/final PoW witnesses
+  - round1 sumcheck PoW witnesses
+
+Measured result on the native blob path:
+
+- post-canonical-challenger baseline: `937,394`
+- after the accepted transcript-native blob rewrite: `927,944`
+- net native blob saving: `-9,450`
+
+The remaining larger idea is still future work: a broader transcript-native layout for additional proof sections, only where the arithmetic hot path does not turn the byte-order change into a net loss. The final polynomial is the clearest current example of a section that should stay arithmetic-native unless measurements prove otherwise.
+
+Confidence on further wins beyond the accepted subset: medium-low.
 
 **5. Sumcheck: send extra round data (proof format change)**
 

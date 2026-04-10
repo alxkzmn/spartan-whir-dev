@@ -7,14 +7,15 @@ todos:
     status: completed
   - id: stage1
     content: "Stage 1: KoalaBear base field + quartic/octic extension arithmetic (quartic-first, octic-ready)"
-    status: pending
+    status: completed
   - id: stage2
     content: "Stage 2: Keccak challenger / transcript parity, driven by exported Rust traces"
-    status: pending
+    status: completed
   - id: stage3
     content: "Stage 3: Merkle multiproof verification with domain-prefixed Keccak and digest masking"
     status: pending
   - id: stage4
+    content: "Stage 4: Standalone WHIR verifier -- quartic passes first, then octic, with the main WHIR optimization pass"
     content: "Stage 4: Standalone WHIR verifier -- quartic passes first, then octic, with the main WHIR optimization pass"
     status: pending
   - id: stage5
@@ -258,7 +259,7 @@ Both quartic and octic extensions use the binomial irreducible polynomial X^d - 
   - tampered commitment
   - tampered STIR query opening with commitments and OOD answers left unchanged
   - tampered initial OOD answer (expected to surface as an OOD failure and/or downstream transcript mismatch)
-- Transcript checkpoint traces: every `observe` and `sample` call recorded with the challenger state, for byte-level parity testing
+- Transcript checkpoint traces: every `observe`, `sample`, `sample_bits`, and `grind` call recorded in canonical replay form. Export the exact absorbed bytes for observe events, the sampled outputs for challenge events, and a separate checkpoint sample after the replay trace. Use this trace artifact for byte-level Solidity parity tests; do not rely on Rust debug-string dumps of challenger state.
 - Field arithmetic test vectors: random tuples (a, b, a+b, a-b, ab, a^-1) for base field, quartic extension, and octic extension
 - Merkle test vectors: leaf hashes, node compressions, multiproof verification cases
 - The exact WHIR Fiat-Shamir domain-separator pattern (the `Vec<F>` from `DomainSeparator::observe_domain_separator`) for the chosen config, exported as a test vector. Record the pattern length in fixture metadata for bytecode-size estimation.
@@ -285,6 +286,7 @@ Both quartic and octic extensions use the binomial irreducible polynomial X^d - 
 - Start this stage with transcript traces generated from the current Rust baseline schedule (`FoldingFactor::Constant(whir.folding_factor)`). The challenger implementation itself is schedule-agnostic; if the schedule is changed later, regenerate the traces for the chosen schedule and rerun the same parity tests.
 - Implement `KeccakChallenger.sol` to match the behavior of the Rust `SerializingChallenger32<KoalaBear, HashChallenger<u8, Keccak256Hash, 32>>` path used by `spartan-whir`.
 - **Do not implement the challenger from documentation or memory. Implement it from exported Rust transcript traces.** The only safe specification is "the Solidity challenger must produce the exact same observe/sample sequence as the Rust challenger, byte for byte, on the same inputs."
+- Export the transcript trace in a replay-friendly typed format (for example, ABI-encoded or structured JSON): observe events carry the exact absorbed bytes, challenge events carry the expected sampled values, and the checkpoint sample is kept separate from the replay event list. The Solidity Stage 2 tests should consume this canonical trace artifact directly.
 - Spartan transcript context observation (reference: [spartan-whir/src/protocol.rs](spartan-whir/src/protocol.rs) lines 313-318):
   1. Build the 76-byte `DomainSeparator::to_bytes()` preimage from the canonical R1CS shape, security config, and WHIR parameters.
   2. Compute `keccak256(preimage)` to produce a 32-byte digest.

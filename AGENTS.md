@@ -72,6 +72,30 @@ Markdown files shared with humans (READMEs, design docs) should use 4th-level he
 
 Use existing names from the codebase. Do not coin new abbreviations for blob formats, verifier paths, or protocol variants. Invented acronyms are hard to search for, confuse readers, and never appear in the actual code.
 
+### Write docs like a human maintainer, not an optimization log
+
+When writing READMEs, design docs, or long-form explanations, prefer normal human labels and sentences over internal shorthand. If a phrase would sound strange when spoken aloud to another engineer, rewrite it.
+
+Avoid labels like:
+
+- "local-diff"
+- "size-first"
+- "follow-up pass"
+- "wrapper reclaim"
+- "production-path snapshot"
+- "current best path"
+
+Prefer plain language instead:
+
+- "current state"
+- "wrapper verifier"
+- "native verifier"
+- "bytecode reduction"
+- "measured result"
+- "recommended deployment target"
+
+Technical precision still matters, but the default should be readable prose, not commit-log jargon.
+
 ### Verification-facing changes are protocol surface
 
 Any change to transcript ordering, proof encoding, digest layout, Merkle hashing, or domain separator construction will break the Solidity verifier if not mirrored there. These are protocol-level changes. When making such a change, state explicitly which Solidity components are affected and what needs to be updated.

@@ -2,13 +2,11 @@
 
 ## Current Work: Solidity Verifier for Spartan-WHIR
 
-The primary active task is building a Solidity (EVM) verifier for the Spartan-WHIR SNARK. The full implementation plan lives at:
+The primary active task is building a Solidity (EVM) verifier for the Spartan-WHIR SNARK. The canonical root document lives at:
 
-- **`./solidity_verifier_plan.md`** -- this is the canonical, reviewed plan.
+- **`./README.md`** -- this is the canonical, reviewed root document for the verifier work. If you need to make changes to the project plan, always write them to `./README.md` so it stays current.
 
-If you need to make changes to the plan, copy `./solidity_verifier_plan.md` into your own planning system first, then modify from there. Always write changes back to `./solidity_verifier_plan.md` so the workspace copy stays current.
-
-Read the plan file before starting any implementation work. It contains frozen ABI schemas, locked architectural decisions, stage sequencing, source-of-truth boundaries, and risk notes that have been reviewed across multiple rounds of expert review.
+Read the root README before starting any implementation work. It contains frozen ABI schemas, locked architectural decisions, stage sequencing, source-of-truth boundaries, and risk notes that have been reviewed across multiple rounds of expert review.
 
 ## Workspace Layout
 
@@ -61,18 +59,18 @@ This workspace contains several sibling projects. They serve different roles:
 
 This file should contain **gotchas, non-obvious decisions, and tool/workflow instructions** — things that prevent the agent from repeating past mistakes or rediscovering working patterns. It should NOT contain:
 
-- Measurements, gas numbers, test counts, or other facts about current state that change after every optimization or refactor. Use `solidity_verifier_plan.md` for that, or provide commands to obtain them.
+- Measurements, gas numbers, test counts, or other facts about current state that change after every optimization or refactor. Use the root `README.md` for that, or provide commands to obtain them.
 - Descriptions of what the code does (the code is the source of truth for that).
 
 Exception: temporary tool issues that need workarounds. These should include instructions for how to detect when the issue is fixed, and a note to update this file when it is (e.g., "Foundry flamegraphs crash on deep call trees — if this stops happening, remove this caveat").
 
 ### Use `####` headers in user-facing documents
 
-Markdown files shared with humans (READMEs, `solidity_verifier_plan.md`, design docs) should use 4th-level headers (`####`) to break up long `###` sections. This makes it possible to link someone directly to a specific subsection instead of saying "scroll down a bit." Do not avoid `####` out of style preference.
+Markdown files shared with humans (READMEs, design docs) should use 4th-level headers (`####`) to break up long `###` sections. This makes it possible to link someone directly to a specific subsection instead of saying "scroll down a bit." Do not avoid `####` out of style preference.
 
 ### Do not invent abbreviations or acronyms
 
-Use existing names from the codebase. Do not coin new abbreviations like "WHRB" for "WHIR blob" or "SPWB" for "Spartan-WHIR blob." Invented acronyms are hard to search for, confuse readers, and never appear in the actual code.
+Use existing names from the codebase. Do not coin new abbreviations for blob formats, verifier paths, or protocol variants. Invented acronyms are hard to search for, confuse readers, and never appear in the actual code.
 
 ### Verification-facing changes are protocol surface
 
@@ -117,7 +115,7 @@ The Solidity verifier architecture supports both extension degrees from the star
 
 `spartan-whir` currently hardcodes `FoldingFactor::Constant(...)` when building the WHIR config (see `whir_pcs.rs` line 311). The Solidity plan now targets a **schedule-generic verifier core** from the first implementation: the runtime-config verifier should consume the derived per-round schedule from exported config data instead of assuming a constant folding factor in code.
 
-Changing Rust to `ConstantFromSecondRound` is a protocol-surface change: it changes the derived round schedule, WHIR Fiat-Shamir pattern, and fixed-config verifier constants. Do not change the folding-factor variant without following the schedule-tuning process in `./solidity_verifier_plan.md` and regenerating all affected fixtures/generated code.
+Changing Rust to `ConstantFromSecondRound` is a protocol-surface change: it changes the derived round schedule, WHIR Fiat-Shamir pattern, and fixed-config verifier constants. Do not change the folding-factor variant without following the schedule-tuning process in `./README.md` and regenerating all affected fixtures/generated code.
 
 ## Gas Profiling with Forge Flamegraphs
 
@@ -226,4 +224,4 @@ Key gotcha: **`--private-key` is required.** Without it, Foundry silently produc
 
 ## Implementation Stages (Summary)
 
-See `./solidity_verifier_plan.md` for full details.
+See `./README.md` for full details.

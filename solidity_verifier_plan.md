@@ -24,7 +24,7 @@ todos:
     content: "Stage 6: Spartan-specific and deployment-path optimization with A/B snapshots"
     status: pending
   - id: stage7
-    content: "Stage 7: Full-Spartan SPWB blob wrapper + calldata benchmarking"
+    content: "Stage 7: Full-Spartan blob wrapper + calldata benchmarking"
     status: pending
 isProject: false
 ---
@@ -63,7 +63,7 @@ Implementation order:
 5. Implement the standalone WHIR verifier (quartic first, then octic) and perform the main WHIR optimization pass there
 6. Implement the full Spartan verifier on top of standalone WHIR
 7. Optimize only the remaining Spartan-specific or deployment-path hotspots
-8. Add full-Spartan `SPWB` blob support over the typed verifier for calldata optimization
+8. Add full-Spartan blob support over the typed verifier for calldata optimization
 
 The internal architecture supports **octic (degree-8) extensions from the start**, but the first working verifier targets **quartic (degree-4) standalone WHIR**.
 
@@ -93,7 +93,7 @@ The internal architecture supports **octic (degree-8) extensions from the start*
 ## Locked Decisions
 
 - **Fresh implementation.** Do not refactor `./sol-whir/` in place. Write new Solidity code, referencing `./sol-whir/` only for structural patterns.
-- **Typed ABI first.** The first working verifier uses Solidity structs with standard ABI encoding. The Rust exporter produces binary `abi.encode(...)` payloads using the `alloy-sol-types` library. Solidity tests load these via `vm.readFileBinary` and decode with `abi.decode(...)`. The current standalone-WHIR track also carries a fixed-shape blob format in Stage 4, with both a decode-and-delegate wrapper and a native blob verifier. Full-Spartan `SPWB` blob support is later-stage work in Stage 7.
+- **Typed ABI first.** The first working verifier uses Solidity structs with standard ABI encoding. The Rust exporter produces binary `abi.encode(...)` payloads using the `alloy-sol-types` library. Solidity tests load these via `vm.readFileBinary` and decode with `abi.decode(...)`. The current standalone-WHIR track also carries a fixed-shape blob format in Stage 4, with both a decode-and-delegate wrapper and a native blob verifier. Full-Spartan blob support is later-stage work in Stage 7.
 - **Standalone WHIR first.** Build and validate the WHIR polynomial commitment verifier before adding the Spartan layer. The WHIR verifier is the more complex component and accounts for most of the gas cost.
 - **Quartic first, octic second.** Quartic extensions (4 coefficients per element) are simpler to implement and debug. Octic extensions (8 coefficients) are added before the full Spartan verifier is considered complete.
 - **Two concrete verifier families via template-generated specialization.** Solidity has no generics. Extension-dependent modules (`WhirVerifierCore`, `WhirSumcheck`, `SpartanSumcheck`) are written as templates with a placeholder extension library import. The `spartan-whir-export` crate performs simple string substitution to produce two specialized copies (e.g., `WhirVerifierCore4.sol` and `WhirVerifierCore8.sol`) with the correct extension library wired at code-generation time. Extension-independent modules (`KeccakChallenger`, `MerkleVerifier`, `KoalaBear`, `SpartanEvaluator`) are shared. There is no runtime branching or virtual function dispatch on extension degree.
@@ -149,7 +149,7 @@ All Solidity-facing proof and config structs are defined in Stage 0 before the R
 - `bool finalSumcheckPresent` -- `true` if `finalSumcheckRounds > 0` in the config.
 - `SumcheckData finalSumcheck` -- final sumcheck data. When `finalSumcheckPresent` is `false`, this struct is present but contains empty arrays.
 
-**Note on nesting:** The typed ABI allows nested structs and dynamic arrays where needed (e.g., `WhirRoundProof[]` inside `WhirProof`). Within each struct, variable-length data uses flat arrays with explicit counts rather than deeper nesting. This schema prioritizes correctness and ease of debugging over calldata efficiency. The current standalone-WHIR blob path re-encodes the fixed quartic proof family for Stage 4. More general flattening for full-Spartan `SPWB` remains deferred to Stage 7.
+**Note on nesting:** The typed ABI allows nested structs and dynamic arrays where needed (e.g., `WhirRoundProof[]` inside `WhirProof`). Within each struct, variable-length data uses flat arrays with explicit counts rather than deeper nesting. This schema prioritizes correctness and ease of debugging over calldata efficiency. The current standalone-WHIR blob path re-encodes the fixed quartic proof family for Stage 4. More general flattening for the full-Spartan blob format remains deferred to Stage 7.
 
 ### Statement structs
 
@@ -246,13 +246,13 @@ Both quartic and octic extensions use the binomial irreducible polynomial X^d - 
 
 ### Stage 0: Freeze schema + Foundry setup + Rust export tooling
 
-**Sequencing:**
+#### Sequencing
 
 1. Define the Solidity struct definitions (`WhirStructs.sol`, `SpartanStructs.sol`) matching the frozen ABI schema above. These structs are the shared contract between the Rust exporter and the Solidity verifier.
 2. Initialize `./sol-spartan-whir/` with Foundry. Configuration: `solc = "0.8.28"`, `fs_permissions` for testdata access, `via_ir = true`. Install dependencies: `forge-std`, `solady` (provides `LibSort` for STIR query index sorting). Verify that `vm.readFileBinary` is available in the installed Foundry version.
 3. Build the Rust exporter as a separate workspace crate (`./spartan-whir-export/`) that depends on both `spartan-whir` and `alloy-sol-types`. This keeps the ABI-encoding dependency out of the core cryptographic crate. If a separate crate is impractical, the exporter can be placed under `spartan-whir/examples/` with `alloy-sol-types` as a dev-dependency only. The exporter uses `alloy-sol-types` to produce `abi.encode(...)`-compatible binary payloads. No hand-written ABI encoding.
 
-**Rust exporter outputs:**
+#### Rust Exporter Outputs
 
 - Quartic standalone WHIR success and failure fixtures (binary ABI-encoded, loaded in Solidity via `vm.readFileBinary` + `abi.decode`). The initial failure set should include at least:
   - tampered commitment
@@ -262,7 +262,7 @@ Both quartic and octic extensions use the binomial irreducible polynomial X^d - 
 - Field arithmetic test vectors: random tuples (a, b, a+b, a-b, ab, a^-1) for base field, quartic extension, and octic extension
 - Merkle test vectors: leaf hashes, node compressions, multiproof verification cases
 - The exact WHIR Fiat-Shamir domain-separator pattern (the `Vec<F>` from `DomainSeparator::observe_domain_separator`) for the chosen config, exported as a test vector. Record the pattern length in fixture metadata for bytecode-size estimation.
-- Later (as needed by subsequent stages): octic WHIR fixtures, full Spartan fixtures, SPWB blobs
+- Later (as needed by subsequent stages): octic WHIR fixtures, full Spartan fixtures, full-Spartan blobs
 
 ### Stage 1: Arithmetic layer
 
@@ -334,7 +334,7 @@ The full WHIR verification loop inside `finalize` (from [whir-p3/src/whir/verifi
 4. For each WHIR round: read that round's generated parameters, parse the round commitment, check proof-of-work, sample STIR query indices (sample random bits from the challenger, construct indices, sort and deduplicate using Solady's `LibSort`), verify the Merkle multiproof (expects sorted indices), compute fold values via `evaluate_hypercube_ext` on the opened leaf rows, build the round's constraint, run the round's sumcheck.
 5. Final phase: observe the final polynomial into the challenger, verify final STIR queries, run the optional final sumcheck (if the generated final-phase constants require it), check the closing equation via `ConstraintPolyEvaluator`.
 
-**Milestones:**
+#### Milestones
 
 1. Quartic standalone WHIR verifier passes Rust success fixtures.
 2. Quartic verifier correctly rejects tampered proofs: tampered commitment, tampered initial OOD answer / transcript mismatch, tampered STIR query opening, tampered Merkle path or query data, tampered sumcheck data, transcript mismatch.
@@ -342,7 +342,7 @@ The full WHIR verification loop inside `finalize` (from [whir-p3/src/whir/verifi
 4. Octic standalone WHIR verifier passes using the same core logic with `WhirVerifier8.sol`.
 5. Gas benchmarks for both quartic and octic configurations.
 
-**Optimization work that belongs in Stage 4:**
+#### Optimization Work That Belongs In Stage 4
 
 Once quartic standalone WHIR correctness is passing and the first gas profile exists, keep the optimization loop inside Stage 4 until the major standalone WHIR hotspots are addressed. Do not defer these to the end of the project, because Stage 5 inherits the Stage 4 WHIR cost structure.
 
@@ -363,7 +363,7 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - quartic and octic standalone WHIR both pass
   - the main standalone WHIR gas hotspots have been profiled and either optimized or explicitly deferred with a measured reason
 
-**Current quartic fixed-config results (31 March 2026):**
+#### Current Quartic Fixed-Config Results (31 March 2026)
 
 - Accepted optimizations:
   - packed `_eqPolyEvalAt` term construction (`1 + 2pq - p - q` without intermediate ext4 add/sub/fromBase calls)
@@ -514,6 +514,33 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,008,830`
   - `WhirVerifier4.testVerifyQuarticWhirSuccessFixture()`: `1,008,676`
   - deployed bytecode from `forge inspect src/whir/WhirVerifier4.sol:WhirVerifier4 deployedBytecode | wc -c`: `48,757` hex chars, about `24,378` bytes, so deployable under EIP-170 with about `198` bytes of headroom
+  - current phase profile from `forge test --match-test testProfileFullBreakdown -vv`:
+
+    | Component               |       Gas |
+    | ----------------------- | --------: |
+    | Setup                   |  `28,759` |
+    | Initial sumcheck        |  `21,553` |
+    | Round0 parse commitment |  `19,299` |
+    | Round0 STIR             | `194,051` |
+    | Round0 sumcheck         |  `21,983` |
+    | Round1 parse commitment |  `14,793` |
+    | Round1 STIR             | `158,141` |
+    | Round1 sumcheck         |  `25,560` |
+    | Observe final poly      |  `11,387` |
+    | Final STIR              | `147,239` |
+    | Final sumcheck          |  `21,555` |
+    | Constraint evaluation   | `185,136` |
+    | Final value check       |  `11,179` |
+    | Sum of profiled phases  | `860,635` |
+
+  - current STIR internal split from `forge test --match-test testProfileStirBreakdown -vv`:
+
+    | STIR phase | `sampleQueries` | `leafHashing` | `merkleReduction` |    `pow` | `rowFolding` | `overhead` |   `total` |
+    | ---------- | --------------: | ------------: | ----------------: | -------: | -----------: | ---------: | --------: |
+    | Round0     |         `9,161` |      `20,810` |         `176,649` | `18,611` |     `67,950` |    `5,507` | `298,688` |
+    | Round1     |         `6,671` |      `21,938` |         `113,527` | `11,939` |     `64,740` |    `4,961` | `223,776` |
+    | Final      |         `5,539` |      `18,295` |          `87,235` |  `9,102` |     `53,815` |    `4,417` | `178,403` |
+
   - current fixed-shape standalone-WHIR blob state on this same branch:
     - success blob fixture (`quartic_whir_success.blob`): `10,152` bytes
     - decode-and-delegate wrapper path:
@@ -599,7 +626,7 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
       - split the hot blob Merkle root builder by row kind and fast-path the native verifier's fixed `rowLen = 16` shape
       - this removes the remaining generic stride / kind plumbing from `MerkleVerifier._computeRootFromFlatRows20Blob` on the native path and also trims native runtime bytecode `40,397 -> 39,231` hex chars
   - accepted stage4 transcript-native blob rewrite after the canonical challenger pass:
-    - rewrite `WHRB` v1 in place so the transcript-fed sections that are not Merkle-heavy or arithmetic-hot are emitted in transcript-native canonical little-endian form
+    - rewrite the fixed-shape standalone blob layout in place so the transcript-fed sections that are not Merkle-heavy or arithmetic-hot are emitted in transcript-native canonical little-endian form
     - accepted moved sections:
       - initial/per-round OOD answers
       - all sumcheck polynomial evaluations
@@ -699,7 +726,7 @@ This section is intentionally about changes beyond the verifier-only passes docu
 
 These are proof-format or protocol-level changes that go beyond pure Solidity micro-optimization. Each was assessed against real fixture data (16-var, 2-round, foldingFactor=4, queries 9/6/5, depths 18/17/16). Current fixture has 270 Merkle decommitments (123 + 81 + 66) and 344 total compress calls (270 decomm-backed + 37 in-frontier merges + 37 dedup events).
 
-**1. Linearized Merkle authentication paths (historical protocol-redesign experiment, not current branch)**
+#### 1. Linearized Merkle Authentication Paths (Historical Protocol-Redesign Experiment, Not Current Branch)
 
 The compact multiproof (frontier reduction with dedup) was replaced with independent per-query authentication paths, still carried in the flat `bytes32[] decommitments` ABI field as query-major concatenation of sibling paths. The Rust prover now flattens the default Plonky3 `open_batch(...).opening_proof` outputs directly, and both the Rust and Solidity verifiers hash each path independently.
 
@@ -725,7 +752,7 @@ Follow-up: the Solidity-level linear auth path loop (calling `compressNode20()`)
 - Total wrapper tx: `1,172,266` → `1,118,048` (`-54,218`), now **cheaper than sol-whir** (`1,135,052`)
 - optimizer_runs: `325` → `500` (bytecode 24,290, 286-byte margin)
 
-**2. Terminal phase redesign (protocol change)**
+#### 2. Terminal Phase Redesign (Protocol Change)
 
 Current terminal costs: final STIR `130,681` + final select `25,734` + final sumcheck `21,288` + final value check `10,935` = `188,638` total.
 
@@ -737,7 +764,7 @@ Current terminal costs: final STIR `130,681` + final select `25,734` + final sum
 | Remove final sumcheck only | ~21,000           | high       |
 | Full terminal redesign     | ~80,000–152,000   | medium     |
 
-**3. Schedule tuning (parameter change, same protocol)**
+#### 3. Schedule Tuning (Parameter Change, Same Protocol)
 
 Each eliminated query saves ~32,000–37,000 verifier gas. Current schedule (9/6/5 queries) is already balanced. Candidates like `ConstantFromSecondRound(3,4)` may shift the query/fold trade-off. Needs generated fixtures and actual benchmarking — no reliable estimate without data.
 
@@ -748,14 +775,14 @@ Each eliminated query saves ~32,000–37,000 verifier gas. Current schedule (9/6
 
 See the Schedule Tuning Pass section below for the evaluation process.
 
-**4. Transcript-native proof encoding (partially implemented on the Stage 4 blob path)**
+#### 4. Transcript-Native Proof Encoding (Partially Implemented On The Stage 4 Blob Path)
 
 This is no longer purely future work.
 
 Current accepted state:
 
 - the Rust challenger and Solidity challenger now use canonical field bytes for Fiat-Shamir
-- the fixed-shape stage4 `WHRB` blob now uses transcript-native canonical little-endian bytes for:
+- the fixed-shape stage4 standalone blob now uses transcript-native canonical little-endian bytes for:
   - initial/per-round OOD answers
   - all sumcheck polynomial evaluations
   - round/final PoW witnesses
@@ -771,13 +798,13 @@ The remaining larger idea is still future work: a broader transcript-native layo
 
 Confidence on further wins beyond the accepted subset: medium-low.
 
-**5. Sumcheck: send extra round data (proof format change)**
+#### 5. Sumcheck: Send Extra Round Data (Proof Format Change)
 
 Current all-sumcheck cost is ~`47,000` (final select + final sumcheck). Sending one additional value per round (e.g., `h(1)` or coefficients) could eliminate `extrapolate_012` calls (~3,591 each × 4 rounds = ~14,000). Extra calldata: 512–1,024 bytes.
 
 Net tx-gas savings: ~`10,000–15,000`. Modest upside; not a priority.
 
-**6. More grinding (exhausted)**
+#### 6. More Grinding (Exhausted)
 
 `pow_bits = 30` is the practical ceiling in a 31-bit field. No room for additional PoW-vs-query trade-off.
 
@@ -800,7 +827,7 @@ The verifier remains generated from Rust-derived schedule constants. This pass d
    - hypercube-fold workload proxy: same per-round opened leaf widths
    - final-phase workload proxy: `finalPoly.length` and `finalSumcheckRounds`
 6. Decision rule: switch schedules only if proof bytes decrease materially and fixed-config verifier gas does not clearly worsen. If results are mixed, keep `Constant`.
-7. Freeze the chosen schedule before Stage 5, late-stage Spartan/deployment optimization work, later full-Spartan `SPWB` blob benchmarking, and any production-shaped fixed-config wrappers.
+7. Freeze the chosen schedule before Stage 5, late-stage Spartan/deployment optimization work, later full-Spartan blob benchmarking, and any production-shaped fixed-config wrappers.
 8. If a `ConstantFromSecondRound` schedule wins and is adopted:
    - update Rust-side config construction to build that schedule
    - regenerate proof fixtures, `whirFsPattern`, transcript traces, and generated Solidity constants
@@ -843,7 +870,7 @@ Runtime verifier input: `SpartanInstance` (public inputs + witness commitment) +
 
 **Bytecode-size and deployment-gas check** (required after baseline code generation is working): measure runtime bytecode size, initcode size, and deployment gas. Memory-budget profiling (peak memory usage, temporary array sizes) should accompany these measurements.
 
-**Milestones:**
+#### Milestones
 
 1. Quartic full Spartan verifier passes Rust success fixtures.
 2. Correct rejection on: tampered outer claims, tampered inner sumcheck, tampered witness evaluation, tampered PCS proof, wrong public inputs.
@@ -863,7 +890,7 @@ After Stage 5 full Spartan correctness is passing:
 - If profiling shows the generic COO sparse evaluator is a significant cost center, consider replacing it with unrolled straight-line code generated by the Rust tool.
 - If profiling still shows octic-specific field operations are a material fraction of the **full** verifier gas after the Stage 4 WHIR pass, revisit octic tower/decomposition optimizations here.
 
-**Stage 1 baseline gas (from FieldHarness, includes external call overhead):**
+#### Stage 1 Baseline Gas (from FieldHarness, Includes External Call Overhead)
 
 | Operation              | Ext4        | Ext8        |
 | ---------------------- | ----------- | ----------- |
@@ -881,17 +908,17 @@ After Stage 5 full Spartan correctness is passing:
   - Before/after gas snapshots on identical fixtures.
   - Verification that the function interface has not changed.
 
-### Stage 7: Full-Spartan `SPWB` blob wrapper / calldata optimization
+### Stage 7: Full-Spartan blob wrapper / calldata optimization
 
 After the typed verifier is working and gas-optimized:
 
-- Current implemented scope on `stage4`: a fixed-shape quartic standalone-WHIR blob format (`WHRB` magic) for the current 16-variable / 2-round / ext4 proof family, with two Solidity entrypoints:
+- Current implemented scope on `stage4`: a fixed-shape quartic standalone-WHIR blob format for the current 16-variable / 2-round / ext4 proof family, with two Solidity entrypoints:
   - `WhirBlobVerifier4`: decode-and-delegate wrapper over the typed verifier
   - `WhirBlobVerifierNative4`: fixed-shape native verifier that consumes the blob sequentially from calldata
-- Full-Spartan `SPWB` v1 blob support (reference: [spartan-whir/src/codec_v1.rs](spartan-whir/src/codec_v1.rs)) remains future work for the later Spartan verifier stages; it is not the format used by the current standalone-WHIR `WHRB` paths.
+- Full-Spartan blob support from [spartan-whir/src/codec_v1.rs](spartan-whir/src/codec_v1.rs) remains future work for the later Spartan verifier stages; it is not the format used by the current standalone-WHIR blob paths.
 - Use Rust-exported real blob fixtures for testing:
   - current `stage4`: fixed-shape standalone WHIR blobs
-  - later Spartan stages: real `SPWB` blobs
+  - later Spartan stages: real full-Spartan blobs
 - Benchmark both entry points on the same fixtures:
   - Typed ABI calldata: execution gas, calldata size in bytes, calldata gas cost, total estimated transaction cost.
   - Blob calldata: same metrics.
@@ -967,8 +994,8 @@ graph TD
   - Rejection of tampered witness evaluation.
   - Rejection of tampered PCS proof.
   - Rejection on wrong public inputs.
-- **Full-Spartan blob wrapper** (Stage 7): `SPWB` decode-and-delegate parity with the typed verifier path. Malformed blob rejection. Wrong version or header rejection.
-- **Gas benchmarks** (Stage 4 and Stages 6-7): snapshot benchmarks on fixed fixtures for quartic and octic standalone WHIR, quartic and octic full Spartan, typed ABI vs blob calldata. For standalone WHIR, include the typed ABI path, the fixed-shape `WHRB` wrapper path, and the fixed-shape `WHRB` native path.
+- **Full-Spartan blob wrapper** (Stage 7): decode-and-delegate parity with the typed verifier path. Malformed blob rejection. Wrong version or header rejection.
+- **Gas benchmarks** (Stage 4 and Stages 6-7): snapshot benchmarks on fixed fixtures for quartic and octic standalone WHIR, quartic and octic full Spartan, typed ABI vs blob calldata. For standalone WHIR, include the typed ABI path, the fixed-shape standalone blob wrapper path, and the fixed-shape standalone blob native path.
 
 ## Gas Measurement
 
@@ -977,7 +1004,7 @@ graph TD
 - Also keep one direct transaction benchmark for the fixed verifier using a broadcast script against a local Anvil node, so we track the actual user-paid `EOA -> verify(...)` transaction gas in addition to the in-test call-path benchmark.
 - Separate benchmark families: quartic standalone WHIR, octic standalone WHIR, quartic full Spartan, octic full Spartan.
 - Use fixed Rust-generated benchmark fixtures so all gas comparisons use identical inputs.
-- Track typed-ABI, blob-wrapper, and blob-native results separately once those entry points exist. On the standalone track, this now includes both fixed-shape `WHRB` blob paths.
+- Track typed-ABI, blob-wrapper, and blob-native results separately once those entry points exist. On the standalone track, this now includes both fixed-shape standalone blob paths.
 
 ## Assumptions
 
@@ -987,7 +1014,7 @@ graph TD
 - Standalone WHIR uses fixed-config verifiers only; Rust derives the schedule and emits generated Solidity constants for the chosen configuration.
 - The full Spartan verifier is circuit-specific, with Rust-generated Solidity constants.
 - Baseline evaluator: shared generic library with COO data-source abstraction. Inline constants for small test circuits, auxiliary data contracts for realistic circuits. Not replaced with unrolled code unless gas measurements require it.
-- The typed ABI with `abi.encode`/`abi.decode` is the first correctness path. The standalone-WHIR track now also has a fixed-shape blob decoding path; full-Spartan `SPWB` blob decoding remains a later calldata optimization.
+- The typed ABI with `abi.encode`/`abi.decode` is the first correctness path. The standalone-WHIR track now also has a fixed-shape blob decoding path; full-Spartan blob decoding remains a later calldata optimization.
 - `./sol-whir/` is a structural reference only, not a logic source. `./whir-p3/` and `./spartan-whir/` are the logic sources.
 - The WHIR Fiat-Shamir domain-separator pattern is exported from Rust and provided as a constant or runtime input. It is not re-derived in Solidity.
 - The Spartan domain-separator is stored as a precomputed 32-byte hash constant in generated code. The 76-byte preimage is exported separately for parity tests only.

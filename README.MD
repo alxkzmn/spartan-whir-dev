@@ -467,6 +467,9 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - `_computeRootFromFrontier20` mechanical pointer rewrite: keep the two-buffer frontier algorithm and proof semantics unchanged, but carry `nodeIsRight`, `nextReadPtr`, and `sameParent` explicitly so parent dedup is computed once per output entry and the read pointer advances in one place; saved `3,005` gas and slightly shrank deployed bytecode
   - direct OOD point expansion into retained flat buffers: `_parseCommitment` and `_parseFixedCommitment` now write the sampled univariate-ext expansion straight into `oodStatement.flatPoints` / `oodFlatPoints` via `expandFromUnivariateExtInto`, eliminating one temporary `uint256[]` allocation and one copy loop per sampled point
   - production raw two-round fixed-select entrypoint: `WhirVerifier4.verify` now keeps round-0 and round-1 `challenge` / `eqFlatPoints` / `selVars` as explicit locals and calls `_evaluateConstraintsFixedSelectRaw(...)`; the array/struct path remains as a wrapper for tests and generic helpers instead of the production hot path
+  - fold mod elimination in `_foldOnceWithCoeffs`, `_foldOnce`, and `_foldOnceBase`: removed algebraically redundant `mod` on differences d_i; the differences ∈ [1, 2P-1] are congruent mod P and the final `mod` on each output coefficient handles reduction; products r_j × d_i < P × 2P ≈ 2^63 fit in uint256; saved `11,268` gas across ~22 inlined call sites
+  - cascade `_bswap64`: replaced 8-term shift+mask+or byte-swap with 3-step cascade (swap adjacent bytes, swap 16-bit pairs, swap 32-bit halves); saved `384` gas
+  - `sampleBitsUnchecked` unchecked mask: wrapped the mask computation `(1 << bits) - 1` in `unchecked`; the `unchecked` context propagates through the inlined `_sampleUint32` callee; saved `513` gas
 - Rejected optimizations (continued):
   - Horner scheme in `_evaluateConstraint`, `_combineConstraintEvals`, `_evaluateInitialConstraint`: all three caused `stack-too-deep` because the reversed loop adds one extra live variable beyond the 16-slot Yul stack limit when `_eqPolyEvalAt` is inlined
   - low-level assembly rewrite of `_mul_packed`: +208k gas regression (compiler optimizes the Solidity version better)
@@ -481,6 +484,7 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - generic constraint path (`_evaluateConstraints` replacing `_evaluateConstraintsFixedSelect`): saved 1,028 bytes but added 3,225 gas from compiler inlining differences; not worth the gas regression
   - selectPoly function deduplication (generic `_selectPolyEvalAt` replacing arity-specialized kernels): compiler already deduplicates — identical bytecode output
   - delayed-mod in selectPoly loops: JUMPI (10 gas) overhead per iteration makes counter-based batching net-negative
+  - challenger `INITIAL_CAPACITY` increase from 64 to 512: saved only `141` gas with `+8` bytes bytecode; the doubling-array reallocation pattern is already cheap and `duplexing()` resets the buffer frequently
 - Rejected optimization for the lifetime-split pass:
   - helper relocation to save bytecode (`_statementFromCalldata`, `_concatenateEq`, `_emptySelect` moved out of `WhirVerifierCore4`): no deployable bytecode reduction and no gas change; reverted
   - raw round-local fixed-select streaming (`FixedConstraint[]` replaced with explicit round locals and direct `_evaluateConstraint12Select` / `_evaluateConstraint8Select` calls from `WhirVerifier4.verify`): regressed canonical gas from `1,040,144` to `1,040,638` and increased `constraint fixed select` from `131,840` to `135,672`; reverted
@@ -493,11 +497,11 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
     - combined initial + round-0 specialization (`_parseFixedCommitment16x2` + `_parseFixedCommitment12x2`): lowered canonical gas to `1,006,406` but increased deployed bytecode to about `24,759` bytes, exceeding EIP-170; reverted as non-deployable
   - deleting dead source-only parser helpers (`_parseFixedCommitment12x2`, `_parseFixedCommitment8x2`) after settling on the initial-only parser specialization: no change to canonical gas (`1,007,224`) and no change to deployed `WhirVerifier4` bytecode (`24,455` bytes), confirming they were already absent from the live runtime
 
-- Current stage4 state (10 April 2026):
+- Current linearized-merkle state (11 April 2026):
   - `foundry.toml`: `optimizer_runs = 833`
-  - `WhirVerifier4.testGasWhirVerifyFixed()`: `1,008,830`
-  - `WhirVerifier4.testVerifyQuarticWhirSuccessFixture()`: `1,008,676`
-  - deployed bytecode from `forge inspect src/whir/WhirVerifier4.sol:WhirVerifier4 deployedBytecode | wc -c`: `48,757` hex chars, about `24,378` bytes, so deployable under EIP-170 with about `198` bytes of headroom
+  - `WhirVerifier4.testGasWhirVerifyFixed()`: `932,563`
+  - `WhirVerifier4.testVerifyQuarticWhirSuccessFixture()`: `932,409`
+  - deployed bytecode from `forge inspect src/whir/WhirVerifier4.sol:WhirVerifier4 deployedBytecode | wc -c`: `42,876` hex chars, about `21,437` bytes, so deployable under EIP-170 with about `3,139` bytes of headroom
 
 #### Current Phase Profile
 
@@ -505,20 +509,20 @@ Measured with `forge test --match-test testProfileFullBreakdown -vv`.
 
     | Component               |       Gas |
     | ----------------------- | --------: |
-    | Setup                   |  `28,759` |
-    | Initial sumcheck        |  `21,553` |
-    | Round0 parse commitment |  `19,299` |
-    | Round0 STIR             | `194,051` |
-    | Round0 sumcheck         |  `21,983` |
-    | Round1 parse commitment |  `14,793` |
-    | Round1 STIR             | `158,141` |
-    | Round1 sumcheck         |  `25,560` |
+    | Setup                   |  `28,547` |
+    | Initial sumcheck        |  `21,673` |
+    | Round0 parse commitment |  `19,090` |
+    | Round0 STIR             | `154,618` |
+    | Round0 sumcheck         |  `22,102` |
+    | Round1 parse commitment |  `14,576` |
+    | Round1 STIR             | `129,955` |
+    | Round1 sumcheck         |  `25,602` |
     | Observe final poly      |  `11,387` |
-    | Final STIR              | `147,239` |
-    | Final sumcheck          |  `21,555` |
-    | Constraint evaluation   | `185,136` |
-    | Final value check       |  `11,179` |
-    | Sum of profiled phases  | `860,635` |
+    | Final STIR              | `125,627` |
+    | Final sumcheck          |  `21,651` |
+    | Constraint evaluation   | `185,437` |
+    | Final value check       |  `10,519` |
+    | Sum of profiled phases  | `770,784` |
 
 #### Current STIR Breakdown
 
@@ -526,19 +530,19 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
 
     | STIR phase | `sampleQueries` | `leafHashing` | `merkleReduction` |    `pow` | `rowFolding` | `overhead` |   `total` |
     | ---------- | --------------: | ------------: | ----------------: | -------: | -----------: | ---------: | --------: |
-    | Round0     |         `9,161` |      `20,810` |         `176,649` | `18,611` |     `67,950` |    `5,507` | `298,688` |
-    | Round1     |         `6,671` |      `21,938` |         `113,527` | `11,939` |     `64,740` |    `4,961` | `223,776` |
-    | Final      |         `5,539` |      `18,295` |          `87,235` |  `9,102` |     `53,815` |    `4,417` | `178,403` |
+    | Round0     |         `8,988` |      `20,591` |          `76,215` | `18,611` |     `64,602` |    `5,485` | `194,492` |
+    | Round1     |         `6,556` |      `21,938` |          `48,312` | `11,939` |     `60,780` |    `4,912` | `154,437` |
+    | Final      |         `5,439` |      `18,299` |          `37,614` |  `9,117` |     `50,530` |    `4,445` | `125,444` |
 
 - standalone blob verifier on this branch:
-  - success blob fixture (`quartic_whir_success.blob`): `10,152` bytes
+  - success blob fixture (`quartic_whir_success.blob`): `11,512` bytes
   - wrapper verifier:
-    - `WhirBlobVerifier4.testGasWhirVerifyBlobFixed()`: `1,210,200`
+    - `WhirBlobVerifier4.testGasWhirVerifyBlobFixed()`: `1,154,373`
     - useful for malformed-blob rejection and calldata-size benchmarking, but not an execution-gas win
   - native blob verifier:
-    - `WhirBlobVerifierNative4.testGasWhirVerifyBlobNativeFixed()`: `927,944`
-    - `WhirBlobVerifierNative4.testVerifyQuarticWhirSuccessBlobNative()`: `927,922`
-    - deployed bytecode from `forge inspect src/whir/WhirBlobVerifierNative4.sol:WhirBlobVerifierNative4 deployedBytecode | wc -c`: `39,503` hex chars, about `19,751` bytes, so deployable under EIP-170 with about `4,825` bytes of headroom
+    - `WhirBlobVerifierNative4.testGasWhirVerifyBlobNativeFixed()`: `842,343`
+    - `WhirBlobVerifierNative4.testVerifyQuarticWhirSuccessBlobNative()`: `842,321`
+    - deployed bytecode from `forge inspect src/whir/WhirBlobVerifierNative4.sol:WhirBlobVerifierNative4 deployedBytecode | wc -c`: `42,838` hex chars, about `21,418` bytes, so deployable under EIP-170 with about `3,158` bytes of headroom
     - this is the fastest verifier on this branch and the recommended deployment target, because it verifies directly from the standalone blob instead of materializing typed proof structs
     - current blob layout:
       - transcript-native canonical little-endian bytes for initial/per-round OOD answers, all sumcheck polynomial evaluations, round/final PoW witnesses, and round1 sumcheck PoW witnesses
@@ -638,6 +642,24 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
     - native blob: `937,394 -> 927,944` (`-9,450`)
     - wrapper blob: `1,194,448 -> 1,210,200` (`+15,752`)
     - typed verifier unchanged from that point
+  - accepted follow-up native-only wins on top of that transcript-native state:
+    - `927,944 -> 921,702` (`-6,242`)
+      - fuse native STIR row hashing and row evaluation so each opened row is loaded once instead of once for Merkle hashing and again for folding
+    - `921,702 -> 917,474` (`-4,228`)
+      - replace the five separate final STIR `hornerBaseBlob(...)` scans with one fixed 16-coefficient batch checker that keeps scalar lane accumulators in one assembly loop
+    - `917,474 -> 915,401` (`-2,073`)
+      - raw-allocate the native `frontier` and `rowEvals` buffers in `_computeBaseRootAndEvalsBlob16` and `_computeExtensionRootAndEvalsBlob16` because both buffers are fully overwritten before any read
+      - this also trims native runtime bytecode `22,041 -> 21,940` bytes
+  - accepted constant-factor optimizations on shared code (affects all verifier paths):
+    - `915,401 -> 904,133` (`-11,268`)
+      - remove 4 algebraically redundant `mod` operations on differences in `_foldOnceWithCoeffs` and `_foldOnce`, and 1 in `_foldOnceBase`; the differences d_i ∈ [1, 2P-1] are congruent mod P and the final `mod` on each output coefficient handles reduction; saves ~500 gas per inlined call site across ~22 call sites in the native verifier
+    - `904,133 -> 903,749` (`-384`)
+      - replace the 8-term shift+mask+or `_bswap64` with a 3-step cascade byte-swap (swap adjacent bytes, swap 16-bit pairs, swap 32-bit halves)
+    - `903,749 -> 903,236` (`-513`)
+      - wrap the mask computation in `sampleBitsUnchecked` in `unchecked`; the `unchecked` context propagates through the inlined `_sampleUint32` callee
+    - net constant-factor savings: `915,401 -> 903,236` (`-12,165`, `-1.33%`), native bytecode `21,940 -> 21,889` bytes (`-51`)
+  - rejected constant-factor candidate:
+    - increasing `INITIAL_CAPACITY` in `KeccakChallenger` from 64 to 512: saved only `141` gas with `+8` bytes bytecode; the doubling-array pattern is already cheap and `duplexing()` resets the buffer frequently
   - conclusion:
     - the stage4 native blob verifier benefits materially
     - the wrapper remains a reference / malformed-blob / calldata-benchmark path and is not an execution target
@@ -653,15 +675,16 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
   - fixed-length `hornerBaseBlob16`: regressed native blob gas to `965,621`
   - removing the outer final-poly validation before `observeValidatedPackedExt4Pair`: regressed native blob gas to `960,949`
   - replacing `_parseFixedCommitment12x2Blob/_parseFixedCommitment8x2Blob` with the generic `_parseFixedCommitment2Blob(..., 12/8)`: regressed native blob gas to `944,839` and increased native bytecode chars `42,475 -> 44,669`
+  - monolithic assembly rewrite of `_evaluateExtensionRowDim4BlobWindow`: regressed native blob gas to `919,809` and increased native runtime bytecode `22,041 -> 23,101` bytes
 - verifier state after that parser work:
   - same as the current state above
 
 - Current focused STIR detail profiling (from `test/WhirStirDetailProfile.t.sol`):
-  - final STIR materialization: `148,526`
+  - final STIR materialization: `147,236`
   - final STIR check-only: `0`
-  - Round 0 frontier: `frontierInit = 22,051`, `merkleLoopOnly = 162,211`
-  - Round 1 frontier: `frontierInit = 22,760`, `merkleLoopOnly = 107,085`
-  - Final frontier: `frontierInit = 19,026`, `merkleLoopOnly = 87,853`
+  - Round 0 frontier: `frontierInit = 22,051`, `merkleLoopOnly = 170,724`
+  - Round 1 frontier: `frontierInit = 22,760`, `merkleLoopOnly = 109,421`
+  - Final frontier: `frontierInit = 19,026`, `merkleLoopOnly = 84,481`
 
 ### Assessed protocol-level / proof-format optimizations (future work plus one historical experiment)
 
@@ -669,7 +692,7 @@ This section is intentionally about changes beyond the verifier-only passes docu
 
 These are proof-format or protocol-level changes that go beyond pure Solidity micro-optimization. Each was assessed against real fixture data (16-var, 2-round, foldingFactor=4, queries 9/6/5, depths 18/17/16). Current fixture has 270 Merkle decommitments (123 + 81 + 66) and 344 total compress calls (270 decomm-backed + 37 in-frontier merges + 37 dedup events).
 
-#### 1. Linearized Merkle Authentication Paths (Historical Protocol-Redesign Experiment, Not Current Branch)
+#### 1. Linearized Merkle Authentication Paths (Active — Current Branch)
 
 The compact multiproof (frontier reduction with dedup) was replaced with independent per-query authentication paths, still carried in the flat `bytes32[] decommitments` ABI field as query-major concatenation of sibling paths. The Rust prover now flattens the default Plonky3 `open_batch(...).opening_proof` outputs directly, and both the Rust and Solidity verifiers hash each path independently.
 
@@ -736,6 +759,8 @@ Measured result on the native blob verifier:
 - result immediately after the canonical challenger change: `937,394`
 - after the accepted transcript-native blob rewrite: `927,944`
 - net native blob saving: `-9,450`
+- after the later native-only verifier optimizations that kept the transcript-native layout intact: `915,401`
+- after constant-factor optimizations on shared code (fold mod elimination, cascade bswap64, unchecked mask): `903,236`
 
 The remaining larger idea is still future work: a broader transcript-native layout for additional proof sections, only where the arithmetic hot path does not turn the byte-order change into a net loss. The final polynomial is the clearest current example of a section that should stay arithmetic-native unless measurements prove otherwise.
 
@@ -855,12 +880,12 @@ After Stage 5 full Spartan correctness is passing:
 
 After the typed verifier is working and gas-optimized:
 
-- Current implemented scope on `stage4`: a quartic standalone blob format for the current 16-variable / 2-round / ext4 proof family, with two Solidity entrypoints:
+- Current implemented scope on `linearized-merkle`: a quartic standalone blob format for the current 16-variable / 2-round / ext4 proof family, with two Solidity entrypoints:
   - `WhirBlobVerifier4`: decode-and-delegate wrapper over the typed verifier
   - `WhirBlobVerifierNative4`: native verifier that consumes the blob sequentially from calldata
 - Full-Spartan blob support from [spartan-whir/src/codec_v1.rs](spartan-whir/src/codec_v1.rs) remains future work for the later Spartan verifier stages; it is not the format used by the current standalone-WHIR blob paths.
 - Use Rust-exported real blob fixtures for testing:
-  - current `stage4`: standalone WHIR blobs
+  - current `linearized-merkle`: standalone WHIR blobs
   - later Spartan stages: real full-Spartan blobs
 - Benchmark both entry points on the same fixtures:
   - Typed ABI calldata: execution gas, calldata size in bytes, calldata gas cost, total estimated transaction cost.

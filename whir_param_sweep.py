@@ -30,6 +30,10 @@ Known constraints:
   - KoalaBear TWO_ADICITY = 24, BabyBear TWO_ADICITY = 27
   - Constraint: log_folded_domain_size = (num_vars + lir - ff_0) <= TWO_ADICITY
   - rs_domain_initial_reduction_factor (v) must be <= ff_0
+  - Rust-level schedule validity is not the same thing as current stage4 Solidity
+    compatibility. The script can rank broader schedules, but only the current
+    selected schedule has been fully benchmarked end-to-end on the current
+    stage4 fixed verifier path.
 
 Usage:
   python3 whir_param_sweep.py
@@ -715,6 +719,11 @@ def print_sweep(
     print(
         f"Max PoW: {MAX_POW_BITS} bits (31-bit prime field), "
         f"TWO_ADICITY: {TWO_ADICITY}"
+    )
+    print(
+        "Note: rows below are Rust-valid schedule candidates. The current stage4 "
+        "Solidity verifier is only benchmarked end-to-end on the selected "
+        "Constant(4), lir=6, rs_v=1 schedule."
     )
 
     # --- Sweep parameter ranges ---

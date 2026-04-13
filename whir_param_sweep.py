@@ -17,11 +17,12 @@ whir-p3/src/parameters/errors.rs (CapacityBound branch). Includes:
   - Final pow_bits, final folding PoW bits
   - Validity check: all derived PoW ≤ max_pow_bits (mirrors check_pow_bits())
 
-Current stage4 calibration note (9 April 2026):
-  - Live deployable baseline: folding_factor=4, starting_log_inv_rate=6,
-    max_pow_bits=30, num_vars=16 → 1,007,224 execution gas (measured)
-  - Current model row for that same config: 1,009,980 execution gas
-  - Error: +2,756 gas (+0.27%)
+Current stage4 calibration note (13 April 2026):
+  - Live typed-verifier baseline: folding_factor=4, starting_log_inv_rate=6,
+    rs_domain_initial_reduction_factor=1, max_pow_bits=30, num_vars=16
+    → 996,068 execution gas (measured)
+  - Current model row for that same config: 996,068 execution gas
+  - Error: 0 gas (+0.00%)
 
 Known constraints:
   - KoalaBear ORDER = 2^31 - 2^24 + 1 → max_pow_bits = 30 (hard assert in challenger)
@@ -30,6 +31,10 @@ Known constraints:
   - KoalaBear TWO_ADICITY = 24, BabyBear TWO_ADICITY = 27
   - Constraint: log_folded_domain_size = (num_vars + lir - ff_0) <= TWO_ADICITY
   - rs_domain_initial_reduction_factor (v) must be <= ff_0
+  - Rust-level schedule validity is not the same thing as current stage4 Solidity
+    compatibility. The script can rank broader schedules, but only the current
+    selected schedule has been fully benchmarked end-to-end on the current
+    stage4 fixed verifier path.
 
 Usage:
   python3 whir_param_sweep.py
@@ -393,41 +398,46 @@ def expected_merkle_decommitments(nq: int, depth: int) -> float:
 
 # === GAS COST MODEL ===
 #
-# Sub-cost constants below were originally derived from forge measurements on the
-# stage4 quartic verifier path and then retained as a simple ranking model.
-# The important current calibration point is the full current row:
-#   Constant(4), starting_log_inv_rate=6, rs_v=1
-#   -> model: 1,009,980 execution gas
-#   -> live stage4 baseline: 1,007,224 execution gas
+# Sub-cost constants below are calibrated to the current stage4 quartic typed
+# verifier path (`WhirVerifier4.testGasWhirVerifyFixed()`).
 #
-# Historical source measurements (folding_factor=4, 16 vars, 2 rounds + final):
-#   Merkle: Round 0 (depth=18, 9q): 168,140 total gas
-#     Dedup model: expected_merkle_compresses(9, 18) ≈ 143.4 compress calls
-#     → MERKLE_PER_COMPRESS = 168,140 / 143.4 ≈ 1,173 gas per compress
-#   Leaf hash base (folding_factor=4): 20,784 / 9q = 2,309/q → ~144 gas per base value
-#   Leaf hash ext4 (folding_factor=4): (22,068 + 18,404) / 11q = 3,679/q → ~230 gas per ext4 value
-#   Row fold base (folding_factor=4): 68,787 / 9q = 7,643/q
-#     -> 15 fold ops, 8 promote+fold = 326 gas, 7 ext4 fold = 719 gas
-#   Row fold ext4 (folding_factor=4): (64,722 + 53,800) / 11q = 10,775/q → 719 gas per fold op
-#   PoW: ~710 gas/bit + 50 base
-#   Sample: ~1,050/q, Overhead: ~700/q
-#   OOD (per sample, initial or per-round): challenger.sample_algebra_element (~500 gas)
-#     + challenger.observe_algebra_element (~200 gas) + ABI decode from proof (~300 gas)
-#     ≈ ~1,000 gas/sample execution
-#   ABI calldata: all values/OOD are uint256[] slots (32 bytes each).
-#     Base uint256: 4 nonzero + 28 zero bytes → 176 gas.  Ext4 uint256: 16 nonzero + 16 zero → 320 gas.
-
-# Calibrate Merkle per-compress cost from profiling data point:
-#   168,140 gas total for round 0, depth=18, 9 queries.
-MERKLE_PER_COMPRESS = round(168140 / expected_merkle_compresses(9, 18))
+# They are still a ranking model, not a formal cost model, but the dynamic
+# pieces now reflect the live stage4 profiling buckets much more closely:
+#   - Merkle reduction from `testProfileStirBreakdown`
+#   - leaf hashing from `testProfileStirBreakdown`
+#   - row folding from `testProfileStirBreakdown`
+#   - sample / per-query overhead from `testProfileStirBreakdown`
+#   - fixed overhead chosen so the current selected schedule
+#     (Constant(4), lir=6, rs_v=1) matches the live 996,068 gas baseline
+#
+# Current calibration point:
+#   Constant(4), starting_log_inv_rate=6, rs_v=1
+#   -> model: 996,068 execution gas
+#   -> live stage4 baseline: 996,068 execution gas
+#
+# Calibrated from the 13 April 2026 stage4 harness output:
+#   - Merkle reduction weighted across the three current STIR phases:
+#       (176,649 + 113,527 + 87,234) / expected_merkle_compresses(...) ≈ 1,283 gas/compress
+#   - Leaf hashing:
+#       base ≈ 145 gas/value, ext4 ≈ 229 gas/value
+#   - Row folding:
+#       ext4 ≈ 675 gas/op, base promote+fold ≈ 307 gas/op
+#   - Sample / per-query overhead:
+#       sample ≈ 1,050 gas/query, overhead ≈ 741 gas/query
+#   - OOD (per sample, initial or per-round):
+#       challenger.sample_algebra_element + challenger.observe_algebra_element + decode
+#       ≈ ~1,000 gas/sample execution
+#   - ABI calldata:
+#       base uint256 slot ≈ 176 gas, packed ext4 uint256 slot ≈ 320 gas
+MERKLE_PER_COMPRESS = 1283
 SAMPLE_PER_QUERY = 1050
-OVERHEAD_PER_QUERY = 700
-LEAF_HASH_BASE_PER_VALUE = 144
-LEAF_HASH_EXT4_PER_VALUE = 230
-FOLD_EXT4_PER_OP = 719
-FOLD_BASE_PROMOTE_PER_OP = 326
-POW_PER_BIT = 710
-POW_BASE = 50
+OVERHEAD_PER_QUERY = 741
+LEAF_HASH_BASE_PER_VALUE = 145
+LEAF_HASH_EXT4_PER_VALUE = 229
+FOLD_EXT4_PER_OP = 675
+FOLD_BASE_PROMOTE_PER_OP = 307
+POW_PER_BIT = 551
+POW_BASE = 0
 OOD_EXEC_PER_SAMPLE = 1000  # sample + observe + decode per OOD answer
 # ABI calldata cost per uint256 slot (32 bytes):
 # Base field (31-bit): 4 nonzero data bytes + 28 zero-padding = 4×16 + 28×4 = 176 gas
@@ -437,10 +447,10 @@ EXT4_VALUE_CD = 320  # per uint256 slot holding one packed ext4 element
 # Merkle decommitment: bytes32 = 32 bytes, ~20 nonzero digest + 12 zero padding
 # 20×16 + 12×4 = 368 gas per node
 DECOMMIT_CD = 368
-CONSTRAINT_PER_VARIABLE = 9000  # eq-poly + select-poly + combine overhead
+CONSTRAINT_PER_VARIABLE = 9272  # eq-poly + select-poly + combine overhead
 TERMINAL_TAIL_PER_ROUND = 5322
 TERMINAL_TAIL_BASE = 25734
-FIXED_OVERHEAD = 77857
+FIXED_OVERHEAD = 65217
 
 
 def leaf_hash_per_query(ff: int, is_base: bool) -> int:
@@ -666,6 +676,11 @@ def print_sweep(
     print(
         f"Max PoW: {MAX_POW_BITS} bits (31-bit prime field), "
         f"TWO_ADICITY: {TWO_ADICITY}"
+    )
+    print(
+        "Note: rows below are Rust-valid schedule candidates. The current stage4 "
+        "Solidity verifier is only benchmarked end-to-end on the selected "
+        "Constant(4), lir=6, rs_v=1 schedule."
     )
 
     # --- Sweep parameter ranges ---

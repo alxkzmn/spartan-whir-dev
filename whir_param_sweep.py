@@ -17,11 +17,12 @@ whir-p3/src/parameters/errors.rs (CapacityBound branch). Includes:
   - Final pow_bits, final folding PoW bits
   - Validity check: all derived PoW ≤ max_pow_bits (mirrors check_pow_bits())
 
-Cost model calibrated against actual forge measurements (sol-spartan-whir, 2026-04):
-  - Baseline: folding_factor=4, starting_log_inv_rate=6, max_pow_bits=30, num_vars=16 → 986,923 execution gas (measured)
+Cost model calibrated against actual forge measurements (sol-spartan-whir, 13 April 2026):
+  - Baseline: folding_factor=4, starting_log_inv_rate=6, rs_domain_initial_reduction_factor=1,
+    max_pow_bits=30, num_vars=16 → 932,563 execution gas (measured)
   - Uses linearized Merkle auth paths (per-query sibling paths, inline assembly)
   - Schedule-dependent phases (setup, sumchecks, parse, observe, final ops) are modeled
-    from testProfileFullBreakdown output, not collapsed into one constant
+    from the current `testProfileFullBreakdown` output, not collapsed into one constant
 
 Known constraints:
   - KoalaBear ORDER = 2^31 - 2^24 + 1 → max_pow_bits = 30 (hard assert in challenger)
@@ -366,8 +367,8 @@ def derive_config(
 # (MERKLE_PER_COMPRESS) includes inline keccak256, digest masking, and
 # left/right child ordering.
 #
-# Verified against profiling: 77,660 / (9 * 18) = 479.4 gas/compress (Round 0),
-# 49,100 / (6 * 17) = 481.4 (Round 1), 38,373 / (5 * 16) = 479.7 (Final).
+# Verified against profiling: 76,215 / (9 * 18) = 470.5 gas/compress (Round 0),
+# 48,312 / (6 * 17) = 473.6 (Round 1), 37,614 / (5 * 16) = 470.2 (Final).
 
 
 def merkle_compress_calls(nq: int, depth: int) -> int:
@@ -380,21 +381,21 @@ def merkle_decommitments(nq: int, depth: int) -> int:
     return nq * depth
 
 
-# === GAS COST MODEL (calibrated from actual forge measurements, 2026-04) ===
+# === GAS COST MODEL (calibrated from actual forge measurements, 2026-04-13) ===
 #
 # Source measurements (folding_factor=4, 16 vars, 2 rounds + final, linear auth paths):
 #   Merkle (linear auth paths, inline assembly _computeRootFromLeafHashes20):
-#     Round 0 (depth=18, 9q): 77,660 gas, 162 compress calls → 479 gas/compress
-#     Round 1 (depth=17, 6q): 49,100 gas, 102 compress calls → 481 gas/compress
-#     Final  (depth=16, 5q): 38,373 gas,  80 compress calls → 480 gas/compress
-#     → MERKLE_PER_COMPRESS = 480 gas per compress (average)
-#   Leaf hash base (folding_factor=4): 20,674 / 9q = 2,297/q → ~144 gas per base value
-#   Leaf hash ext4 (folding_factor=4): (21,996 + 18,349) / 11q = 3,668/q → ~229 gas per ext4 value
-#   Row fold base (folding_factor=4): 67,815 / 9q = 7,535/q
-#     -> 15 fold ops, 8 promote+fold = 326 gas, 7 ext4 fold = 719 gas
-#   Row fold ext4 (folding_factor=4): (64,650 + 53,755) / 11q = 10,764/q → 719 gas per fold op
-#   PoW: ~710 gas/bit + 50 base
-#   Sample: ~1,050/q, Overhead: ~700/q
+#     Round 0 (depth=18, 9q): 76,215 gas, 162 compress calls → 470 gas/compress
+#     Round 1 (depth=17, 6q): 48,312 gas, 102 compress calls → 474 gas/compress
+#     Final  (depth=16, 5q): 37,614 gas,  80 compress calls → 470 gas/compress
+#     → MERKLE_PER_COMPRESS = 471 gas per compress (average)
+#   Leaf hash base (folding_factor=4): 20,591 / 9q = 2,288/q → ~143 gas per base value
+#   Leaf hash ext4 (folding_factor=4): (21,938 + 18,299) / 11q = 3,658/q → ~229 gas per ext4 value
+#   Row fold base (folding_factor=4): 64,602 / 9q = 7,178/q
+#     -> 15 fold ops, 8 promote+fold = 306 gas, 7 ext4 fold = 675 gas
+#   Row fold ext4 (folding_factor=4): (60,780 + 50,530) / 11q = 10,119/q → 675 gas per fold op
+#   STIR PoW: ~551 gas/bit (weighted average across the three current STIR rounds)
+#   Sample: ~1,050/q, Overhead: ~742/q
 #   OOD (per sample, initial or per-round): challenger.sample_algebra_element (~500 gas)
 #     + challenger.observe_algebra_element (~200 gas) + ABI decode from proof (~300 gas)
 #     ≈ ~1,000 gas/sample execution
@@ -402,16 +403,16 @@ def merkle_decommitments(nq: int, depth: int) -> int:
 #     Base uint256: 4 nonzero + 28 zero bytes → 176 gas.  Ext4 uint256: 16 nonzero + 16 zero → 320 gas.
 
 # Calibrate Merkle per-compress cost from profiling data (linear auth paths):
-#   Average across rounds: (479.4 + 481.4 + 479.7) / 3 ≈ 480 gas/compress
-MERKLE_PER_COMPRESS = 480
+#   Average across rounds: (470.5 + 473.6 + 470.2) / 3 ≈ 471 gas/compress
+MERKLE_PER_COMPRESS = 471
 SAMPLE_PER_QUERY = 1050
-OVERHEAD_PER_QUERY = 700
-LEAF_HASH_BASE_PER_VALUE = 144
-LEAF_HASH_EXT4_PER_VALUE = 230
-FOLD_EXT4_PER_OP = 719
-FOLD_BASE_PROMOTE_PER_OP = 326
-POW_PER_BIT = 710
-POW_BASE = 50
+OVERHEAD_PER_QUERY = 742
+LEAF_HASH_BASE_PER_VALUE = 143
+LEAF_HASH_EXT4_PER_VALUE = 229
+FOLD_EXT4_PER_OP = 675
+FOLD_BASE_PROMOTE_PER_OP = 306
+POW_PER_BIT = 551
+POW_BASE = 0
 # ABI calldata cost per uint256 slot (32 bytes):
 # Base field (31-bit): 4 nonzero data bytes + 28 zero-padding = 4×16 + 28×4 = 176 gas
 # Ext4 packed (4×31-bit in top 16 bytes): ~16 nonzero + 16 zero = 16×16 + 16×4 = 320 gas
@@ -420,54 +421,54 @@ EXT4_VALUE_CD = 320  # per uint256 slot holding one packed ext4 element
 # Merkle decommitment: bytes32 = 32 bytes, ~20 nonzero digest + 12 zero padding
 # 20×16 + 12×4 = 368 gas per node
 DECOMMIT_CD = 368
-CONSTRAINT_PER_VARIABLE = 9000  # eq-poly + select-poly + combine overhead
+CONSTRAINT_PER_VARIABLE = 9272  # eq-poly + select-poly + combine overhead
 
 # === SCHEDULE-DEPENDENT PHASE COSTS ===
 #
-# Calibrated from testProfileFullBreakdown (16-var baseline, ff=4, lir=6).
-# These replace the old FIXED_OVERHEAD constant, which collapsed all schedule-
-# dependent work into one number and could mis-rank configs.
+# Calibrated from the current `testProfileFullBreakdown` output on the
+# linearized-merkle branch (16-var baseline, ff=4, lir=6).
 #
 # Phase breakdown (profiled, baseline):
-#   setup                66,059  = SETUP_BASE(35,408) + parse(commitment_ood=2, nv=16)
-#   initial sumcheck     20,974  = ff_0(4) * SC_PER_ROUND(5,244)
-#   round0 parse         24,716  = PARSE_BASE(6,907) + ood(2)*nv(12)*742
-#   round0 sumcheck      22,069  = ff(4) * SC_PER_ROUND(5,517) + pow_gas(0)
-#   round1 parse         18,779  = PARSE_BASE(6,907) + ood(2)*nv(8)*742
-#   round1 sumcheck      24,648  = ff(4) * SC_PER_ROUND(5,517) + pow_gas(4)≈2,890
-#   observe finalPoly    15,803  = finalPolyLen(16) * OBSERVE_PER_COEFF(988)
-#   final select         25,722  = nq(5) * polyLen(16) * SELECT_PER_EVAL(322)
-#   final sumcheck       21,138  = fsr(4) * SC_PER_ROUND(5,285)
-#   final value check    10,917  = polyLen(16) * VALUE_PER_COEFF(682)
+#   setup                28,547
+#   initial sumcheck     21,673
+#   round0 parse         19,090
+#   round0 sumcheck      22,102
+#   round1 parse         14,576
+#   round1 sumcheck      25,602
+#   observe finalPoly    11,387
+#   final select         0
+#   final sumcheck       21,651
+#   final value check    10,519
 #
-# SC_PER_ROUND uses average across all no-PoW sumchecks: (5244+5517+5285)/3 ≈ 5350.
-# Max per-instance error: ~3% (acceptable for ranking).
-# Parse regression: r0=24,715 vs 24,716, r1=18,779 vs 18,779 (exact).
+# We model those as:
+#   - setup base
+#   - parse(base + ood_samples * num_variables * OOD_PER_SAMPLE_PER_VAR)
+#   - separate per-round costs for initial, regular, and final sumchecks
+#   - dedicated folding-PoW cost inside round sumchecks
+#   - final poly observation and final value check per coefficient
 #
-# These costs were previously absorbed into stir (fpow, OOD) or FIXED_OVERHEAD.
-# Now: fpow moves to sumcheck, OOD moves to parse, other phases are explicit.
-# INTERPHASE_RESIDUAL captures un-profiled inter-phase overhead (constraint-
-# building between STIR and sumcheck phases, memory ops, ABI bookkeeping).
-# profiled phases sum to 829,787 of 986,923 total; the over-prediction of
-# STIR component models absorbs most of that gap, leaving a small residual.
+# The profiling harness still undercounts the full end-to-end typed verifier,
+# so INTERPHASE_RESIDUAL remains a constant fitted to the current selected
+# schedule after the dynamic buckets above are updated.
 
-# Setup: domain separator observation + observePattern + initial eq/constraint build
-SETUP_BASE = 35_408
+# Setup: domain separator observation + observePattern + initial scaffold work
+SETUP_BASE = 4_943
 # Parse commitment: _parseCommitment per invocation
-PARSE_COMMITMENT_BASE = 6_907  # per-invocation overhead (observe digest, etc.)
-OOD_PER_SAMPLE_PER_VAR = (
-    742  # OOD expansion cost: sample + squaring per variable + observe
-)
-# Sumcheck verification: per-round (observe 2 ext4, sample challenge, extrapolate)
-SC_PER_ROUND = 5_350  # average of initial(5244), round(5517), final(5285)
+PARSE_COMMITMENT_BASE = 5_548
+OOD_PER_SAMPLE_PER_VAR = 564
+# Sumcheck verification costs
+INITIAL_SC_PER_ROUND = 5_418
+ROUND_SC_PER_ROUND = 5_526
+FINAL_SC_PER_ROUND = 5_413
+FOLDING_POW_PER_BIT = 875
 # Observe finalPoly: observePackedExt4Slice per coefficient
-OBSERVE_EXT4_PER_COEFF = 988
-# Final select: Horner evaluation of finalPoly at each query point
-FINAL_SELECT_PER_EVAL = 322  # per query × per coefficient
-# Final value check: Horner evaluation of finalPoly at randomness point
-FINAL_VALUE_PER_COEFF = 682
+OBSERVE_EXT4_PER_COEFF = 712
+# Final select: Horner evaluation of finalPoly at each final query point
+FINAL_SELECT_PER_EVAL = 0
+# Final value check: evaluate finalPoly at the final randomness point
+FINAL_VALUE_PER_COEFF = 657
 # Un-profiled inter-phase overhead (constant across configs)
-INTERPHASE_RESIDUAL = 56_390
+INTERPHASE_RESIDUAL = 97_628
 
 
 def leaf_hash_per_query(ff: int, is_base: bool) -> int:
@@ -490,6 +491,12 @@ def pow_gas(pow_bits: int) -> int:
     if pow_bits == 0:
         return 0
     return int(POW_PER_BIT * pow_bits + POW_BASE)
+
+
+def folding_pow_gas(pow_bits: int) -> int:
+    if pow_bits == 0:
+        return 0
+    return int(FOLDING_POW_PER_BIT * pow_bits)
 
 
 @dataclass
@@ -539,7 +546,9 @@ def estimate_execution_gas(cfg: WhirConfig) -> GasBreakdown:
     )
 
     # Initial sumcheck: ff_0 rounds + starting folding PoW
-    sched += cfg.ff_0 * SC_PER_ROUND + pow_gas(cfg.starting_folding_pow_bits)
+    sched += cfg.ff_0 * INITIAL_SC_PER_ROUND + folding_pow_gas(
+        cfg.starting_folding_pow_bits
+    )
 
     # Per non-final round: parse commitment + folding sumcheck
     for r in cfg.round_parameters:
@@ -550,7 +559,9 @@ def estimate_execution_gas(cfg: WhirConfig) -> GasBreakdown:
                 + r.ood_samples * r.num_variables * OOD_PER_SAMPLE_PER_VAR
             )
             # Folding sumcheck: ff_rest rounds + folding PoW
-            sched += cfg.ff_rest * SC_PER_ROUND + pow_gas(r.folding_pow_bits)
+            sched += cfg.ff_rest * ROUND_SC_PER_ROUND + folding_pow_gas(
+                r.folding_pow_bits
+            )
 
     # Observe finalPoly
     sched += final_poly_length * OBSERVE_EXT4_PER_COEFF
@@ -559,7 +570,7 @@ def estimate_execution_gas(cfg: WhirConfig) -> GasBreakdown:
     sched += final_nq * final_poly_length * FINAL_SELECT_PER_EVAL
 
     # Final sumcheck: fsr rounds + final folding PoW
-    sched += cfg.final_sumcheck_rounds * SC_PER_ROUND + pow_gas(
+    sched += cfg.final_sumcheck_rounds * FINAL_SC_PER_ROUND + folding_pow_gas(
         cfg.final_folding_pow_bits
     )
 

@@ -31,10 +31,10 @@ Known constraints:
   - KoalaBear TWO_ADICITY = 24, BabyBear TWO_ADICITY = 27
   - Constraint: log_folded_domain_size = (num_vars + lir - ff_0) <= TWO_ADICITY
   - rs_domain_initial_reduction_factor (v) must be <= ff_0
-  - Rust-level schedule validity is not the same thing as current stage4 Solidity
+  - Rust-level schedule validity is not the same thing as current linearized-merkle Solidity
     compatibility. The script can rank broader schedules, but only the current
     selected schedule has been fully benchmarked end-to-end on the current
-    stage4 fixed verifier path.
+    linearized-merkle verifier path.
 
 Usage:
   python3 whir_param_sweep.py
@@ -54,8 +54,7 @@ SECURITY_LEVEL = 80
 MAX_POW_BITS = 30  # hard limit: (1 << bits) < F::ORDER_U32 for 31-bit primes
 TWO_ADICITY = 24  # KoalaBear (BabyBear = 27, irrelevant for num_vars <= 16)
 MAX_SEND = 6  # MAX_NUM_VARIABLES_TO_SEND_COEFFS
-DEFAULT_MAX_STARTING_LOG_INV_RATE = 6  # current practical client/mobile ceiling
-ABSOLUTE_MAX_STARTING_LOG_INV_RATE = 11  # broader exploratory sweep ceiling
+MAX_STARTING_LOG_INV_RATE = 11  # sweep cap
 
 
 def eta_cb(log_inv_rate: int) -> float:
@@ -394,11 +393,12 @@ def merkle_decommitments(nq: int, depth: int) -> int:
 #   Row fold base (folding_factor=4): 64,602 / 9q = 7,178/q
 #     -> 15 fold ops, 8 promote+fold = 306 gas, 7 ext4 fold = 675 gas
 #   Row fold ext4 (folding_factor=4): (60,780 + 50,530) / 11q = 10,119/q → 675 gas per fold op
-#   STIR PoW: ~551 gas/bit (weighted average across the three current STIR rounds)
+#   STIR evaluation-point exponentiation:
+#     Round 0: 18,611 / (9q * 18 depth) ≈ 115 gas/depth-bit/query
+#     Round 1: 11,939 / (6q * 17 depth) ≈ 117 gas/depth-bit/query
+#     Final:    9,117 / (5q * 16 depth) ≈ 114 gas/depth-bit/query
+#     → EVAL_POINT_POW_PER_DEPTH_BIT = 116
 #   Sample: ~1,050/q, Overhead: ~742/q
-#   OOD (per sample, initial or per-round): challenger.sample_algebra_element (~500 gas)
-#     + challenger.observe_algebra_element (~200 gas) + ABI decode from proof (~300 gas)
-#     ≈ ~1,000 gas/sample execution
 #   ABI calldata: all values/OOD are uint256[] slots (32 bytes each).
 #     Base uint256: 4 nonzero + 28 zero bytes → 176 gas.  Ext4 uint256: 16 nonzero + 16 zero → 320 gas.
 
@@ -411,8 +411,8 @@ LEAF_HASH_BASE_PER_VALUE = 143
 LEAF_HASH_EXT4_PER_VALUE = 229
 FOLD_EXT4_PER_OP = 675
 FOLD_BASE_PROMOTE_PER_OP = 306
-POW_PER_BIT = 551
-POW_BASE = 0
+EVAL_POINT_POW_PER_DEPTH_BIT = 116
+EVAL_POINT_POW_BASE = 0
 # ABI calldata cost per uint256 slot (32 bytes):
 # Base field (31-bit): 4 nonzero data bytes + 28 zero-padding = 4×16 + 28×4 = 176 gas
 # Ext4 packed (4×31-bit in top 16 bytes): ~16 nonzero + 16 zero = 16×16 + 16×4 = 320 gas
@@ -487,10 +487,10 @@ def fold_per_query(ff: int, is_base: bool) -> int:
         return int(n_folds * FOLD_EXT4_PER_OP)
 
 
-def pow_gas(pow_bits: int) -> int:
-    if pow_bits == 0:
+def evaluation_point_pow_gas(depth: int) -> int:
+    if depth == 0:
         return 0
-    return int(POW_PER_BIT * pow_bits + POW_BASE)
+    return int(EVAL_POINT_POW_PER_DEPTH_BIT * depth + EVAL_POINT_POW_BASE)
 
 
 def folding_pow_gas(pow_bits: int) -> int:
@@ -501,7 +501,7 @@ def folding_pow_gas(pow_bits: int) -> int:
 
 @dataclass
 class GasBreakdown:
-    stir: int = 0  # STIR operations: merkle, leaf, fold, sample, overhead, pow_bits
+    stir: int = 0  # STIR operations: merkle, leaf, fold, sample, overhead, evaluation-point pow
     constraint: int = 0  # eq-poly + select-poly evaluation
     schedule: int = 0  # schedule-dependent: setup, sumchecks, parse, observe, final ops
     residual: int = 0  # un-profiled inter-phase overhead (constant)
@@ -524,8 +524,8 @@ def estimate_execution_gas(cfg: WhirConfig) -> GasBreakdown:
         fold = fold_per_query(r.folding_factor, r.is_base) * nq
         sample = SAMPLE_PER_QUERY * nq
         oh = OVERHEAD_PER_QUERY * nq
-        pw = pow_gas(r.pow_bits)
-        stir += merkle + leaf + fold + sample + oh + pw
+        eval_pow = nq * evaluation_point_pow_gas(depth)
+        stir += merkle + leaf + fold + sample + oh + eval_pow
 
     # --- Constraint evaluation: eq-poly + select-poly ---
     constraint = 0
@@ -638,7 +638,7 @@ def _short_name(name: str) -> str:
     s = name.replace("CURRENT ", "").replace("ConstantFromSecondRound", "CFSR")
     s = s.replace(",starting_log_inv_rate=", ", lir=")
     s = s.replace(",rs_domain_initial_reduction_factor=", ", rs_v=")
-    return s + (" ◀" if name.startswith("CURRENT") else "")
+    return s + (" ◀ WhirVerifier4.sol" if name.startswith("CURRENT") else "")
 
 
 _CFG_W = 44  # config name column width
@@ -685,6 +685,15 @@ def _table_row(r: "SweepResult", base_total: int, rank: int = None) -> str:
     )
 
 
+def _table_ellipsis_row() -> str:
+    return (
+        f"| {'...':>3} | {'...':<{_CFG_W}} "
+        f"| {'...':>4} | {'...':>7} "
+        f"| {'...':>9} | {'...':>8} "
+        f"| {'...':>10} | {'...':>9} |"
+    )
+
+
 def make_config_name(
     ff_0: int, ff_rest: int, lir: int, rs_v: int, is_current: bool = False
 ) -> str:
@@ -712,16 +721,15 @@ class SweepResult:
 
 
 def max_starting_log_inv_rate(
-    num_vars: int, ff_0: int, practical_cap: int = DEFAULT_MAX_STARTING_LOG_INV_RATE
+    num_vars: int, ff_0: int, sweep_cap: int = MAX_STARTING_LOG_INV_RATE
 ) -> int:
-    """Largest starting_log_inv_rate allowed by validity and the chosen search cap."""
-    capped = min(practical_cap, ABSOLUTE_MAX_STARTING_LOG_INV_RATE)
-    return min(capped, TWO_ADICITY - num_vars + ff_0)
+    """Largest starting_log_inv_rate allowed by validity and the chosen sweep cap."""
+    return min(sweep_cap, TWO_ADICITY - num_vars + ff_0)
 
 
 def print_sweep(
     num_vars: int = 16,
-    max_starting_log_inv_rate_cap: int = DEFAULT_MAX_STARTING_LOG_INV_RATE,
+    max_starting_log_inv_rate_cap: int = MAX_STARTING_LOG_INV_RATE,
 ):
     print(
         f"WHIR Parameter Sweep — {num_vars} variables, {SECURITY_LEVEL}-bit security, "
@@ -732,7 +740,7 @@ def print_sweep(
         f"TWO_ADICITY: {TWO_ADICITY}"
     )
     print(
-        "Note: rows below are Rust-valid schedule candidates. The current stage4 "
+        "Note: rows below are Rust-valid schedule candidates. The current linearized-merkle "
         "Solidity verifier is only benchmarked end-to-end on the selected "
         "Constant(4), lir=6, rs_v=1 schedule."
     )
@@ -742,8 +750,7 @@ def print_sweep(
     #   - Constant(ff): ff in [1, num_vars]
     #   - ConstantFromSecondRound(ff_0, ff_rest): 1 <= ff_rest < ff_0 <= num_vars
     #   - starting_log_inv_rate in [1, min(cap, TWO_ADICITY - num_vars + ff_0)]
-    #     (default cap = 6 for current practical client/mobile policy;
-    #      use --max-starting-log-inv-rate 11 for broader exploratory sweeps)
+    #     (default cap = 11 for the current sweep)
     MAX_POW = MAX_POW_BITS
 
     # Current baseline
@@ -823,10 +830,18 @@ def print_sweep(
 
     # --- Top-N overall ---
     results.sort(key=lambda r: r.total)
-    print(f"\n### TOP 20 OVERALL (out of {len(results)} valid)\n")
+    top_n = 10
+    print(f"\n### TOP {top_n} OVERALL (out of {len(results)} valid)\n")
     print(_table_header(ranked=True))
-    for i, r in enumerate(results[:20], 1):
+    for i, r in enumerate(results[:top_n], 1):
         print(_table_row(r, base_total, rank=i))
+
+    current_index = next(
+        (i for i, r in enumerate(results, 1) if r.name.startswith("CURRENT ")), None
+    )
+    if current_index is not None and current_index > top_n:
+        print(_table_ellipsis_row())
+        print(_table_row(results[current_index - 1], base_total, rank=current_index))
 
     # Summary
     print(f"\n{'=' * 80}")
@@ -838,24 +853,8 @@ def print_sweep(
     )
     print(f"  • Configs with derived PoW > {MAX_POW_BITS} are excluded (invalid)")
     print(
-        "  • execution-gas model uses a coarse terminal-tail bucket "
-        "(final sumcheck rounds + residual terminal verifier work)"
+        f"  • starting_log_inv_rate is capped at {max_starting_log_inv_rate_cap} for this sweep"
     )
-    print(
-        f"  • starting_log_inv_rate is capped at {min(max_starting_log_inv_rate_cap, ABSOLUTE_MAX_STARTING_LOG_INV_RATE)} "
-        f"for this sweep; current practical default is {DEFAULT_MAX_STARTING_LOG_INV_RATE}, "
-        f"broader exploratory cap is {ABSOLUTE_MAX_STARTING_LOG_INV_RATE}"
-    )
-    print(
-        f"  • rs_domain_initial_reduction_factor: round-0 rate growth = ff_0 - rs_domain_initial_reduction_factor"
-    )
-    print(f"    =1 (default): rate grows fast. =ff_0: rate stays flat (shallower tree)")
-    print(f"  • ConstantFromSecondRound configs are EXPLORATORY:")
-    print(f"    spartan-whir currently hardcodes FoldingFactor::Constant(...)")
-    print(
-        f"    Enabling ConstantFromSecondRound requires Rust config change + new Solidity fold kernels"
-    )
-    print(f"  • Round 0 always processes base-field leaves")
 
 
 if __name__ == "__main__":
@@ -868,11 +867,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-starting-log-inv-rate",
         type=int,
-        default=DEFAULT_MAX_STARTING_LOG_INV_RATE,
+        default=MAX_STARTING_LOG_INV_RATE,
         help=(
-            "Practical starting_log_inv_rate sweep cap "
-            f"(default: {DEFAULT_MAX_STARTING_LOG_INV_RATE}, max useful exploratory cap: "
-            f"{ABSOLUTE_MAX_STARTING_LOG_INV_RATE})"
+            "Maximum starting_log_inv_rate to include in the sweep "
+            f"(default: {MAX_STARTING_LOG_INV_RATE})"
         ),
     )
     args = parser.parse_args()

@@ -54,8 +54,7 @@ SECURITY_LEVEL = 80
 MAX_POW_BITS = 30  # hard limit: (1 << bits) < F::ORDER_U32 for 31-bit primes
 TWO_ADICITY = 24  # KoalaBear (BabyBear = 27, irrelevant for num_vars <= 16)
 MAX_SEND = 6  # MAX_NUM_VARIABLES_TO_SEND_COEFFS
-DEFAULT_MAX_STARTING_LOG_INV_RATE = 6  # current practical client/mobile ceiling
-ABSOLUTE_MAX_STARTING_LOG_INV_RATE = 11  # broader exploratory sweep ceiling
+MAX_STARTING_LOG_INV_RATE = 11  # sweep cap and current hard ceiling
 
 
 def eta_cb(log_inv_rate: int) -> float:
@@ -424,6 +423,13 @@ def expected_merkle_decommitments(nq: int, depth: int) -> float:
 #       ext4 ≈ 675 gas/op, base promote+fold ≈ 307 gas/op
 #   - Sample / per-query overhead:
 #       sample ≈ 1,050 gas/query, overhead ≈ 741 gas/query
+#   - Evaluation-point exponentiation:
+#       the STIR harness `pow` bucket measures `KoalaBear.pow(foldedDomainGen, index)`
+#       once per query, which scales with Merkle depth rather than proof-of-work bits
+#       ≈ ~116 gas/depth-bit/query
+#   - Proof-of-work witness verification:
+#       small compared with the query work; modeled separately so the naming matches
+#       the actual operation
 #   - OOD (per sample, initial or per-round):
 #       challenger.sample_algebra_element + challenger.observe_algebra_element + decode
 #       ≈ ~1,000 gas/sample execution
@@ -436,8 +442,10 @@ LEAF_HASH_BASE_PER_VALUE = 145
 LEAF_HASH_EXT4_PER_VALUE = 229
 FOLD_EXT4_PER_OP = 675
 FOLD_BASE_PROMOTE_PER_OP = 307
-POW_PER_BIT = 551
-POW_BASE = 0
+EVAL_POINT_POW_PER_DEPTH_BIT = 116
+EVAL_POINT_POW_BASE = 0
+GRINDING_CHECK_PER_BIT = 20
+GRINDING_CHECK_BASE = 0
 OOD_EXEC_PER_SAMPLE = 1000  # sample + observe + decode per OOD answer
 # ABI calldata cost per uint256 slot (32 bytes):
 # Base field (31-bit): 4 nonzero data bytes + 28 zero-padding = 4×16 + 28×4 = 176 gas
@@ -450,7 +458,7 @@ DECOMMIT_CD = 368
 CONSTRAINT_PER_VARIABLE = 9272  # eq-poly + select-poly + combine overhead
 TERMINAL_TAIL_PER_ROUND = 5322
 TERMINAL_TAIL_BASE = 25734
-FIXED_OVERHEAD = 65217
+FIXED_OVERHEAD = 65669
 
 
 def leaf_hash_per_query(ff: int, is_base: bool) -> int:
@@ -469,10 +477,16 @@ def fold_per_query(ff: int, is_base: bool) -> int:
         return int(n_folds * FOLD_EXT4_PER_OP)
 
 
-def pow_gas(pow_bits: int) -> int:
+def evaluation_point_pow_gas(depth: int) -> int:
+    if depth == 0:
+        return 0
+    return int(EVAL_POINT_POW_PER_DEPTH_BIT * depth + EVAL_POINT_POW_BASE)
+
+
+def grinding_check_gas(pow_bits: int) -> int:
     if pow_bits == 0:
         return 0
-    return int(POW_PER_BIT * pow_bits + POW_BASE)
+    return int(GRINDING_CHECK_PER_BIT * pow_bits + GRINDING_CHECK_BASE)
 
 
 @dataclass
@@ -497,14 +511,16 @@ def estimate_execution_gas(cfg: WhirConfig) -> GasBreakdown:
         fold = fold_per_query(r.folding_factor, r.is_base) * nq
         sample = SAMPLE_PER_QUERY * nq
         oh = OVERHEAD_PER_QUERY * nq
-        pw = pow_gas(r.pow_bits)
-        fpw = pow_gas(r.folding_pow_bits)
-        stir += merkle + leaf + fold + sample + oh + pw + fpw
+        eval_pow = nq * evaluation_point_pow_gas(depth)
+        grinding = grinding_check_gas(r.pow_bits) + grinding_check_gas(
+            r.folding_pow_bits
+        )
+        stir += merkle + leaf + fold + sample + oh + eval_pow + grinding
 
     # Starting folding PoW (before any round)
-    stir += pow_gas(cfg.starting_folding_pow_bits)
+    stir += grinding_check_gas(cfg.starting_folding_pow_bits)
     # Final folding PoW (after all rounds)
-    stir += pow_gas(cfg.final_folding_pow_bits)
+    stir += grinding_check_gas(cfg.final_folding_pow_bits)
     # Initial commitment OOD: sample challenge + observe answer per sample
     stir += cfg.commitment_ood_samples * OOD_EXEC_PER_SAMPLE
     # Per-round OOD: same ops (sample + observe) for each non-final round's ood_answers
@@ -584,7 +600,7 @@ def _short_name(name: str) -> str:
     s = name.replace("CURRENT ", "").replace("ConstantFromSecondRound", "CFSR")
     s = s.replace(",starting_log_inv_rate=", ", lir=")
     s = s.replace(",rs_domain_initial_reduction_factor=", ", rs_v=")
-    return s + (" ◀" if name.startswith("CURRENT") else "")
+    return s + (" ◀ WhirVerifier4.sol" if name.startswith("CURRENT") else "")
 
 
 _CFG_W = 44  # config name column width
@@ -631,6 +647,15 @@ def _table_row(r: "SweepResult", base_total: int, rank: int = None) -> str:
     )
 
 
+def _table_ellipsis_row() -> str:
+    return (
+        f"| {'...':>3} | {'...':<{_CFG_W}} "
+        f"| {'...':>4} | {'...':>7} "
+        f"| {'...':>9} | {'...':>8} "
+        f"| {'...':>10} | {'...':>9} |"
+    )
+
+
 def make_config_name(
     ff_0: int, ff_rest: int, lir: int, rs_v: int, is_current: bool = False
 ) -> str:
@@ -658,16 +683,15 @@ class SweepResult:
 
 
 def max_starting_log_inv_rate(
-    num_vars: int, ff_0: int, practical_cap: int = DEFAULT_MAX_STARTING_LOG_INV_RATE
+    num_vars: int, ff_0: int, sweep_cap: int = MAX_STARTING_LOG_INV_RATE
 ) -> int:
-    """Largest starting_log_inv_rate allowed by validity and the chosen search cap."""
-    capped = min(practical_cap, ABSOLUTE_MAX_STARTING_LOG_INV_RATE)
-    return min(capped, TWO_ADICITY - num_vars + ff_0)
+    """Largest starting_log_inv_rate allowed by validity and the chosen sweep cap."""
+    return min(sweep_cap, TWO_ADICITY - num_vars + ff_0)
 
 
 def print_sweep(
     num_vars: int = 16,
-    max_starting_log_inv_rate_cap: int = DEFAULT_MAX_STARTING_LOG_INV_RATE,
+    max_starting_log_inv_rate_cap: int = MAX_STARTING_LOG_INV_RATE,
 ):
     print(
         f"WHIR Parameter Sweep — {num_vars} variables, {SECURITY_LEVEL}-bit security, "
@@ -688,8 +712,7 @@ def print_sweep(
     #   - Constant(ff): ff in [1, num_vars]
     #   - ConstantFromSecondRound(ff_0, ff_rest): 1 <= ff_rest < ff_0 <= num_vars
     #   - starting_log_inv_rate in [1, min(cap, TWO_ADICITY - num_vars + ff_0)]
-    #     (default cap = 6 for current practical client/mobile policy;
-    #      use --max-starting-log-inv-rate 11 for broader exploratory sweeps)
+    #     (default cap = 11, which is also the current hard sweep ceiling)
     MAX_POW = MAX_POW_BITS
 
     # Current baseline
@@ -769,10 +792,18 @@ def print_sweep(
 
     # --- Top-N overall ---
     results.sort(key=lambda r: r.total)
-    print(f"\n### TOP 20 OVERALL (out of {len(results)} valid)\n")
+    top_n = 10
+    print(f"\n### TOP {top_n} OVERALL (out of {len(results)} valid)\n")
     print(_table_header(ranked=True))
-    for i, r in enumerate(results[:20], 1):
+    for i, r in enumerate(results[:top_n], 1):
         print(_table_row(r, base_total, rank=i))
+
+    current_index = next(
+        (i for i, r in enumerate(results, 1) if r.name.startswith("CURRENT ")), None
+    )
+    if current_index is not None and current_index > top_n:
+        print(_table_ellipsis_row())
+        print(_table_row(results[current_index - 1], base_total, rank=current_index))
 
     # Summary
     print(f"\n{'=' * 80}")
@@ -784,24 +815,8 @@ def print_sweep(
     )
     print(f"  • Configs with derived PoW > {MAX_POW_BITS} are excluded (invalid)")
     print(
-        "  • execution-gas model uses a coarse terminal-tail bucket "
-        "(final sumcheck rounds + residual terminal verifier work)"
+        f"  • starting_log_inv_rate is capped at {max_starting_log_inv_rate_cap} for this sweep"
     )
-    print(
-        f"  • starting_log_inv_rate is capped at {min(max_starting_log_inv_rate_cap, ABSOLUTE_MAX_STARTING_LOG_INV_RATE)} "
-        f"for this sweep; current practical default is {DEFAULT_MAX_STARTING_LOG_INV_RATE}, "
-        f"broader exploratory cap is {ABSOLUTE_MAX_STARTING_LOG_INV_RATE}"
-    )
-    print(
-        f"  • rs_domain_initial_reduction_factor: round-0 rate growth = ff_0 - rs_domain_initial_reduction_factor"
-    )
-    print(f"    =1 (default): rate grows fast. =ff_0: rate stays flat (shallower tree)")
-    print(f"  • ConstantFromSecondRound configs are EXPLORATORY:")
-    print(f"    spartan-whir currently hardcodes FoldingFactor::Constant(...)")
-    print(
-        f"    Enabling ConstantFromSecondRound requires Rust config change + new Solidity fold kernels"
-    )
-    print(f"  • Round 0 always processes base-field leaves")
 
 
 if __name__ == "__main__":
@@ -814,11 +829,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-starting-log-inv-rate",
         type=int,
-        default=DEFAULT_MAX_STARTING_LOG_INV_RATE,
+        default=MAX_STARTING_LOG_INV_RATE,
         help=(
-            "Practical starting_log_inv_rate sweep cap "
-            f"(default: {DEFAULT_MAX_STARTING_LOG_INV_RATE}, max useful exploratory cap: "
-            f"{ABSOLUTE_MAX_STARTING_LOG_INV_RATE})"
+            "starting_log_inv_rate sweep cap "
+            f"(default: {MAX_STARTING_LOG_INV_RATE}, hard ceiling: "
+            f"{MAX_STARTING_LOG_INV_RATE})"
         ),
     )
     args = parser.parse_args()

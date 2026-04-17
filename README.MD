@@ -81,7 +81,7 @@ The internal architecture supports **octic (degree-8) extensions from the start*
 - **Standalone WHIR first.** Build and validate the WHIR polynomial commitment verifier before adding the Spartan layer. The WHIR verifier is the more complex component and accounts for most of the gas cost.
 - **Quartic first, octic second.** Quartic extensions (4 coefficients per element) are simpler to implement and debug. Octic extensions (8 coefficients) are added before the full Spartan verifier is considered complete.
 - **Two concrete verifier families via template-generated specialization.** Solidity has no generics. Extension-dependent modules (`WhirVerifierCore`, `WhirSumcheck`, `SpartanSumcheck`) are written as templates with a placeholder extension library import. The `spartan-whir-export` crate performs simple string substitution to produce two specialized copies (e.g., `WhirVerifierCore4.sol` and `WhirVerifierCore8.sol`) with the correct extension library wired at code-generation time. Extension-independent modules (`KeccakChallenger`, `MerkleVerifier`, `KoalaBear`, `SpartanEvaluator`) are shared. There is no runtime branching or virtual function dispatch on extension degree.
-- **Standalone WHIR uses fixed-config verifiers only.** `WhirVerifier4.sol` / `WhirVerifier8.sol` bake the derived WHIR schedule, Fiat-Shamir pattern, and digest configuration into generated Solidity constants. Solidity does not accept an `ExpandedWhirConfig`-style runtime ABI config.
+- **Standalone WHIR uses fixed-config verifiers only.** `WhirVerifier4_lir6_ff5_rsv1.sol` / `WhirVerifier8.sol` bake the derived WHIR schedule, Fiat-Shamir pattern, and digest configuration into generated Solidity constants. Solidity does not accept an `ExpandedWhirConfig`-style runtime ABI config.
 - **Rust derives the schedule; Solidity consumes generated constants.** The exporter is responsible for deriving the verifier-ready round schedule and emitting Solidity constants for the chosen configuration. If the schedule changes later, regenerate fixtures and generated Solidity; do not reintroduce a runtime-config verifier path.
 - **Circuit-specific full Spartan verifier via generated Solidity.** The Rust code-generation tool emits Solidity constant definitions and sparse R1CS matrix data for a specific circuit. The `SpartanEvaluator` reads this data to verify inner relation checks. For any non-trivial circuit, the matrix data will exceed the EVM's 24576-byte contract size limit if stored inline. Therefore, the `SpartanEvaluator` API is designed from the start to abstract over the data source: inline constants for small test circuits, auxiliary code-as-data contracts (read via `EXTCODECOPY`) for realistic circuits. This transition does not change the evaluator's function signatures.
 - **Optimization after Stage 4 correctness, not at the very end.** The baseline arithmetic uses simple, obviously-correct modular reductions (one reduction per operation), but the main WHIR hot-kernel optimization pass belongs in Stage 4 immediately after standalone correctness and first gas numbers. Later stages should keep only Spartan-specific or deployment-path optimization work that cannot be decided earlier.
@@ -190,7 +190,7 @@ spartan-p3/
 |   |   |   +-- WhirSumcheck8.sol      # template-generated, uses KoalaBearExt8
 |   |   |   +-- WhirVerifierCore4.sol  # template-generated, uses KoalaBearExt4
 |   |   |   +-- WhirVerifierCore8.sol  # template-generated, uses KoalaBearExt8
-|   |   |   +-- WhirVerifier4.sol      # quartic fixed-config wrapper (benchmarks/production)
+|   |   |   +-- WhirVerifier4_lir6_ff5_rsv1.sol      # quartic fixed-config wrapper (benchmarks/production)
 |   |   |   +-- WhirVerifier8.sol      # octic fixed-config wrapper
 |   |   +-- spartan/
 |   |   |   +-- SpartanStructs.sol     # Spartan-level struct definitions
@@ -293,7 +293,7 @@ Split the verifier into these Solidity files:
 
 - `WhirSumcheck4.sol` / `WhirSumcheck8.sol`: sumcheck verification logic, template-generated with the correct extension library.
 - `WhirVerifierCore4.sol` / `WhirVerifierCore8.sol`: round parsing, STIR query processing, fold computation, constraint evaluation, template-generated.
-- `WhirVerifier4.sol` / `WhirVerifier8.sol`: thin wrappers with fixed (compile-time) configuration for gas benchmarks and production use.
+- `WhirVerifier4_lir6_ff5_rsv1.sol` / `WhirVerifier8.sol`: thin wrappers with fixed (compile-time) configuration for gas benchmarks and production use.
 
 The verification logic is based on the current `whir-p3` verifier ([whir-p3/src/whir/verifier/mod.rs](whir-p3/src/whir/verifier/mod.rs)), not the older `sol-whir`.
 
@@ -501,7 +501,7 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
   - `foundry.toml`: `optimizer_runs = 833`
   - `WhirVerifier4.testGasWhirVerifyFixed()`: `996,068`
   - `WhirVerifier4.testVerifyQuarticWhirSuccessFixture()`: `995,914`
-  - deployed bytecode from `forge inspect src/whir/WhirVerifier4.sol:WhirVerifier4 deployedBytecode | wc -c`: `48,124` hex chars, about `24,061` bytes, so deployable under EIP-170 with about `515` bytes of headroom
+  - deployed bytecode from `forge inspect src/whir/WhirVerifier4_lir6_ff5_rsv1.sol:WhirVerifier4 deployedBytecode | wc -c`: `48,124` hex chars, about `24,061` bytes, so deployable under EIP-170 with about `515` bytes of headroom
 
 #### Current Phase Profile
 
@@ -535,14 +535,14 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
     | Final      |         `5,539` |      `18,295` |          `87,235` |  `9,102` |     `53,815` |    `4,417` | `178,403` |
 
 - standalone blob verifier on this branch:
-  - success blob fixture (`quartic_whir_success.blob`): `10,152` bytes
+  - success blob fixture (`quartic_whir_lir6_ff5_rsv1_success.blob`): `10,152` bytes
   - wrapper verifier:
     - `WhirBlobVerifier4.testGasWhirVerifyBlobFixed()`: `1,197,438`
     - useful for malformed-blob rejection and calldata-size benchmarking, but not an execution-gas win
   - native blob verifier:
     - `WhirBlobVerifierNative4.testGasWhirVerifyBlobNativeFixed()`: `903,236`
     - `WhirBlobVerifierNative4.testVerifyQuarticWhirSuccessBlobNative()`: `903,214`
-    - deployed bytecode from `forge inspect src/whir/WhirBlobVerifierNative4.sol:WhirBlobVerifierNative4 deployedBytecode | wc -c`: `43,779` hex chars, about `21,889` bytes, so deployable under EIP-170 with about `2,687` bytes of headroom
+    - deployed bytecode from `forge inspect src/whir/WhirBlobVerifierNative4_lir6_ff5_rsv1.sol:WhirBlobVerifierNative4 deployedBytecode | wc -c`: `43,779` hex chars, about `21,889` bytes, so deployable under EIP-170 with about `2,687` bytes of headroom
     - this is the fastest verifier on this branch and the recommended deployment target, because it verifies directly from the standalone blob instead of materializing typed proof structs
     - current blob layout:
       - transcript-native canonical little-endian bytes for initial/per-round OOD answers, all sumcheck polynomial evaluations, round/final PoW witnesses, and round1 sumcheck PoW witnesses

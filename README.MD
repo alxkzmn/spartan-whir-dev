@@ -81,7 +81,7 @@ The internal architecture supports **octic (degree-8) extensions from the start*
 - **Standalone WHIR first.** Build and validate the WHIR polynomial commitment verifier before adding the Spartan layer. The WHIR verifier is the more complex component and accounts for most of the gas cost.
 - **Quartic first, octic second.** Quartic extensions (4 coefficients per element) are simpler to implement and debug. Octic extensions (8 coefficients) are added before the full Spartan verifier is considered complete.
 - **Two concrete verifier families via template-generated specialization.** Solidity has no generics. Extension-dependent modules (`WhirVerifierCore`, `WhirSumcheck`, `SpartanSumcheck`) are written as templates with a placeholder extension library import. The `spartan-whir-export` crate performs simple string substitution to produce two specialized copies (e.g., `WhirVerifierCore4.sol` and `WhirVerifierCore8.sol`) with the correct extension library wired at code-generation time. Extension-independent modules (`KeccakChallenger`, `MerkleVerifier`, `KoalaBear`, `SpartanEvaluator`) are shared. There is no runtime branching or virtual function dispatch on extension degree.
-- **Standalone WHIR uses fixed-config verifiers only.** `WhirVerifier4_lir6_ff5_rsv1.sol` / `WhirVerifier8.sol` bake the derived WHIR schedule, Fiat-Shamir pattern, and digest configuration into generated Solidity constants. Solidity does not accept an `ExpandedWhirConfig`-style runtime ABI config.
+- **Standalone WHIR uses fixed-config verifiers only.** Schedule-specific wrappers such as `WhirVerifier4_lir6_ff5_rsv1.sol` and `WhirVerifier8_k22_jb100_lir6_ff4_rsv1.sol` bake the derived WHIR schedule, Fiat-Shamir pattern, and digest configuration into generated Solidity constants. Solidity does not accept an `ExpandedWhirConfig`-style runtime ABI config.
 - **Rust derives the schedule; Solidity consumes generated constants.** The exporter is responsible for deriving the verifier-ready round schedule and emitting Solidity constants for the chosen configuration. If the schedule changes later, regenerate fixtures and generated Solidity; do not reintroduce a runtime-config verifier path.
 - **Circuit-specific full Spartan verifier via generated Solidity.** The Rust code-generation tool emits Solidity constant definitions and sparse R1CS matrix data for a specific circuit. The `SpartanEvaluator` reads this data to verify inner relation checks. For any non-trivial circuit, the matrix data will exceed the EVM's 24576-byte contract size limit if stored inline. Therefore, the `SpartanEvaluator` API is designed from the start to abstract over the data source: inline constants for small test circuits, auxiliary code-as-data contracts (read via `EXTCODECOPY`) for realistic circuits. This transition does not change the evaluator's function signatures.
 - **Optimization after Stage 4 correctness, not at the very end.** The baseline arithmetic uses simple, obviously-correct modular reductions (one reduction per operation), but the main WHIR hot-kernel optimization pass belongs in Stage 4 immediately after standalone correctness and first gas numbers. Later stages should keep only Spartan-specific or deployment-path optimization work that cannot be decided earlier.
@@ -191,14 +191,15 @@ spartan-p3/
 |   |   |   +-- WhirVerifierCore4.sol  # template-generated, uses KoalaBearExt4
 |   |   |   +-- WhirVerifierCore8.sol  # template-generated, uses KoalaBearExt8
 |   |   |   +-- WhirVerifier4_lir6_ff5_rsv1.sol      # quartic fixed-config wrapper (benchmarks/production)
-|   |   |   +-- WhirVerifier8.sol      # octic fixed-config wrapper
+|   |   |   +-- k22_jb100_lir6_ff4_rsv1/
+|   |   |   |   +-- WhirVerifier8_k22_jb100_lir6_ff4_rsv1.sol   # octic fixed-config wrapper
 |   |   +-- spartan/
 |   |   |   +-- SpartanStructs.sol     # Spartan-level struct definitions
 |   |   |   +-- SpartanSumcheck4.sol   # template-generated, uses KoalaBearExt4
 |   |   |   +-- SpartanSumcheck8.sol   # template-generated, uses KoalaBearExt8
 |   |   |   +-- SpartanEvaluator.sol   # sparse matrix evaluator (data-source abstracted)
 |   |   |   +-- SpartanVerifier4.sol   # quartic fixed-config wrapper
-|   |   |   +-- SpartanVerifier8.sol   # octic fixed-config wrapper
+|   |   |   +-- SpartanVerifier8_*.sol # octic fixed-config wrapper (generated later in Stage 5)
 |   |   +-- generated/                 # Rust-emitted circuit-specific constants
 |   +-- test/
 |   |   +-- field/                     # arithmetic differential tests
@@ -293,7 +294,7 @@ Split the verifier into these Solidity files:
 
 - `WhirSumcheck4.sol` / `WhirSumcheck8.sol`: sumcheck verification logic, template-generated with the correct extension library.
 - `WhirVerifierCore4.sol` / `WhirVerifierCore8.sol`: round parsing, STIR query processing, fold computation, constraint evaluation, template-generated.
-- `WhirVerifier4_lir6_ff5_rsv1.sol` / `WhirVerifier8.sol`: thin wrappers with fixed (compile-time) configuration for gas benchmarks and production use.
+- `WhirVerifier4_lir6_ff5_rsv1.sol` / `WhirVerifier8_k22_jb100_lir6_ff4_rsv1.sol`: thin wrappers with fixed (compile-time) configuration for gas benchmarks and production use.
 
 The verification logic is based on the current `whir-p3` verifier ([whir-p3/src/whir/verifier/mod.rs](whir-p3/src/whir/verifier/mod.rs)), not the older `sol-whir`.
 
@@ -323,7 +324,7 @@ The full WHIR verification loop inside `finalize` (from [whir-p3/src/whir/verifi
 1. Quartic standalone WHIR verifier passes Rust success fixtures.
 2. Quartic verifier correctly rejects tampered proofs: tampered commitment, tampered initial OOD answer / transcript mismatch, tampered STIR query opening, tampered Merkle path or query data, tampered sumcheck data, transcript mismatch.
 3. Generated fixed-config verifier matches the Rust-derived schedule and transcript constants for the chosen fixture family.
-4. Octic standalone WHIR verifier passes using the same core logic with `WhirVerifier8.sol`.
+4. Octic standalone WHIR verifier passes using the same core logic with the schedule-specific `WhirVerifier8_k22_jb100_lir6_ff4_rsv1.sol` family.
 5. Gas benchmarks for both quartic and octic configurations.
 
 #### Optimization Work That Belongs In Stage 4
@@ -832,7 +833,7 @@ Inline COO constants will exceed the EVM's 24576-byte contract size limit for an
 
 Consider switching from the generic COO evaluator to unrolled straight-line evaluator code (generated by Rust) only if gas profiling after Stage 5 shows the generic evaluator is a significant cost center.
 
-Separate thin wrappers: `SpartanVerifier4.sol` (quartic) and `SpartanVerifier8.sol` (octic).
+Separate thin wrappers: a quartic `SpartanVerifier4...` family and a schedule-specific octic `SpartanVerifier8...` family.
 
 Runtime verifier input: `SpartanInstance` (public inputs + witness commitment) + `SpartanProof`.
 

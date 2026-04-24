@@ -498,11 +498,11 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
     - combined initial + round-0 specialization (`_parseFixedCommitment16x2` + `_parseFixedCommitment12x2`): lowered canonical gas to `1,006,406` but increased deployed bytecode to about `24,759` bytes, exceeding EIP-170; reverted as non-deployable
   - deleting dead source-only parser helpers (`_parseFixedCommitment12x2`, `_parseFixedCommitment8x2`) after settling on the initial-only parser specialization: no change to canonical gas (`1,007,224`) and no change to deployed `WhirVerifier4` bytecode (`24,455` bytes), confirming they were already absent from the live runtime
 
-- Current stage4 state (11 April 2026):
+- Current stage4 state (24 April 2026):
   - `foundry.toml`: `optimizer_runs = 833`
-  - `WhirVerifier4.testGasWhirVerifyFixed()`: `996,068`
-  - `WhirVerifier4.testVerifyQuarticWhirSuccessFixture()`: `995,914`
-  - deployed bytecode from `forge inspect src/whir/WhirVerifier4_lir6_ff5_rsv1.sol:WhirVerifier4 deployedBytecode | wc -c`: `48,124` hex chars, about `24,061` bytes, so deployable under EIP-170 with about `515` bytes of headroom
+  - `WhirVerifier4.testGasWhirVerifyFixed()`: `992,447`
+  - `WhirVerifier4.testVerifyQuarticWhirSuccessFixture()`: `992,293`
+  - deployed bytecode from `forge inspect src/whir/lir6/WhirVerifier4_lir6_ff5_rsv1.sol:WhirVerifier4 deployedBytecode | wc -c`: `48,017` hex chars, about `24,008` bytes, so deployable under EIP-170 with about `568` bytes of headroom
 
 #### Current Phase Profile
 
@@ -510,20 +510,20 @@ Measured with `forge test --match-test testProfileFullBreakdown -vv`.
 
     | Component               |       Gas |
     | ----------------------- | --------: |
-    | Setup                   |  `28,759` |
-    | Initial sumcheck        |  `21,553` |
-    | Round0 parse commitment |  `19,299` |
-    | Round0 STIR             | `194,051` |
-    | Round0 sumcheck         |  `21,983` |
-    | Round1 parse commitment |  `14,793` |
-    | Round1 STIR             | `158,141` |
-    | Round1 sumcheck         |  `25,560` |
-    | Observe final poly      |  `11,387` |
-    | Final STIR              | `147,239` |
-    | Final sumcheck          |  `21,555` |
-    | Constraint evaluation   | `185,136` |
-    | Final value check       |  `11,179` |
-    | Sum of profiled phases  | `860,635` |
+    | Setup                   |  `28,130` |
+    | Initial sumcheck        |  `21,561` |
+    | Round0 parse commitment |  `19,005` |
+    | Round0 STIR             | `188,933` |
+    | Round0 sumcheck         |  `22,003` |
+    | Round1 parse commitment |  `14,493` |
+    | Round1 STIR             | `153,012` |
+    | Round1 sumcheck         |  `25,523` |
+    | Observe final poly      |  `11,383` |
+    | Final STIR              | `143,002` |
+    | Final sumcheck          |  `21,563` |
+    | Constraint evaluation   | `185,448` |
+    | Final value check       |  `10,510` |
+    | Sum of profiled phases  | `844,566` |
 
 #### Current STIR Breakdown
 
@@ -531,19 +531,19 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
 
     | STIR phase | `sampleQueries` | `leafHashing` | `merkleReduction` |    `pow` | `rowFolding` | `overhead` |   `total` |
     | ---------- | --------------: | ------------: | ----------------: | -------: | -----------: | ---------: | --------: |
-    | Round0     |         `9,161` |      `20,810` |         `176,649` | `18,611` |     `67,950` |    `5,507` | `298,688` |
-    | Round1     |         `6,671` |      `21,938` |         `113,527` | `11,939` |     `64,740` |    `4,961` | `223,776` |
-    | Final      |         `5,539` |      `18,295` |          `87,235` |  `9,102` |     `53,815` |    `4,417` | `178,403` |
+    | Round0     |         `8,990` |      `20,810` |         `176,649` | `18,611` |     `64,602` |    `5,492` | `295,154` |
+    | Round1     |         `6,557` |      `21,938` |         `113,527` | `11,939` |     `60,780` |    `4,946` | `219,687` |
+    | Final      |         `5,444` |      `18,295` |          `87,234` |  `9,102` |     `50,515` |    `4,403` | `174,993` |
 
 - standalone blob verifier on this branch:
   - success blob fixture (`quartic_whir_lir6_ff5_rsv1_success.blob`): `10,152` bytes
   - wrapper verifier:
-    - `WhirBlobVerifier4.testGasWhirVerifyBlobFixed()`: `1,197,438`
+    - `WhirBlobVerifier4.testGasWhirVerifyBlobFixed()`: `1,193,829`
     - useful for malformed-blob rejection and calldata-size benchmarking, but not an execution-gas win
   - native blob verifier:
-    - `WhirBlobVerifierNative4.testGasWhirVerifyBlobNativeFixed()`: `903,236`
-    - `WhirBlobVerifierNative4.testVerifyQuarticWhirSuccessBlobNative()`: `903,214`
-    - deployed bytecode from `forge inspect src/whir/WhirBlobVerifierNative4_lir6_ff5_rsv1.sol:WhirBlobVerifierNative4 deployedBytecode | wc -c`: `43,779` hex chars, about `21,889` bytes, so deployable under EIP-170 with about `2,687` bytes of headroom
+    - `WhirBlobVerifierNative4.testGasWhirVerifyBlobNativeFixed()`: `899,906`
+    - `WhirBlobVerifierNative4.testVerifyQuarticWhirSuccessBlobNative()`: `899,884`
+    - deployed bytecode from `forge inspect src/whir/lir6/WhirBlobVerifierNative4_lir6_ff5_rsv1.sol:WhirBlobVerifierNative4 deployedBytecode | wc -c`: `43,755` hex chars, about `21,877` bytes, so deployable under EIP-170 with about `2,699` bytes of headroom
     - this is the fastest verifier on this branch and the recommended deployment target, because it verifies directly from the standalone blob instead of materializing typed proof structs
     - current blob layout:
       - transcript-native canonical little-endian bytes for initial/per-round OOD answers, all sumcheck polynomial evaluations, round/final PoW witnesses, and round1 sumcheck PoW witnesses
@@ -659,6 +659,16 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
     - `903,749 -> 903,236` (`-513`)
       - wrap the mask computation in `sampleBitsUnchecked` in `unchecked`; the `unchecked` context propagates through the inlined `_sampleUint32` callee
     - net constant-factor savings: `915,401 -> 903,236` (`-12,165`, `-1.33%`), native bytecode `21,940 -> 21,889` bytes (`-51`)
+  - latest transcript-buffer and ext8 observation cleanup:
+    - quartic typed verifier: `996,068 -> 992,447` (`-3,621`)
+    - quartic blob wrapper: `1,197,438 -> 1,193,829` (`-3,609`)
+    - quartic native blob: `903,236 -> 899,906` (`-3,330`)
+    - quartic native total tx gas: `975,292 -> 975,202` (`-90`)
+    - octic typed verifier: `8,888,783 -> 8,888,020` (`-763`)
+    - octic native blob: `7,865,125 -> 7,861,397` (`-3,728`)
+    - octic native total tx gas: `8,146,817 -> 8,143,089` (`-3,728`)
+    - replace `new bytes(newCapacity)` in `KeccakChallenger._ensureCapacity(...)` with raw allocation, match the single-value ext8 transcript read path to the already-optimized pair reader, and mark the remaining safe shared assembly blocks as `assembly ("memory-safe")`
+    - attempted Solady-style conditional-reduction rewrites for `KoalaBearExt4.add/sub` and `KoalaBearExt8.add/sub` regressed under `via_ir` and were reverted
   - rejected constant-factor candidate:
     - increasing `INITIAL_CAPACITY` in `KeccakChallenger` from 64 to 512: saved only `141` gas with `+8` bytes bytecode; the doubling-array pattern is already cheap and `duplexing()` resets the buffer frequently
   - conclusion:
@@ -680,8 +690,8 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
 - verifier state after that parser work:
   - same as the current state above
 
-- Current focused STIR detail profiling (from `test/WhirStirDetailProfile.t.sol`):
-  - final STIR materialization: `147,236`
+- Current focused STIR detail profiling (from `test/WhirStirDetailProfile_lir6_ff5_rsv1.t.sol`):
+  - final STIR materialization: `143,026`
   - final STIR check-only: `0`
   - Round 0 frontier: `frontierInit = 22,051`, `merkleLoopOnly = 170,724`
   - Round 1 frontier: `frontierInit = 22,760`, `merkleLoopOnly = 109,421`
@@ -762,6 +772,7 @@ Measured result on the native blob verifier:
 - net native blob saving: `-9,450`
 - after the later native-only verifier optimizations that kept the transcript-native layout intact: `915,401`
 - after constant-factor optimizations on shared code (fold mod elimination, cascade bswap64, unchecked mask): `903,236`
+- after the later transcript-buffer and ext8 observation cleanup: `899,906`
 
 The remaining larger idea is still future work: a broader transcript-native layout for additional proof sections, only where the arithmetic hot path does not turn the byte-order change into a net loss. The final polynomial is the clearest current example of a section that should stay arithmetic-native unless measurements prove otherwise.
 

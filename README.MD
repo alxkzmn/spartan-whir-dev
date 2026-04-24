@@ -697,6 +697,45 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
   - Round 1 frontier: `frontierInit = 22,760`, `merkleLoopOnly = 109,421`
   - Final frontier: `frontierInit = 19,026`, `merkleLoopOnly = 84,481`
 
+### Local KoalaBear Ext8 Arithmetic Precompile Work
+
+The Solidity project includes an experimental octic verifier variant that calls custom EVM precompiles for KoalaBear ext8 arithmetic. The precompiles are not part of mainnet Ethereum; they are served by a patched Anvil node vendored under `foundry-b0a9dd9/`, and the verifier variant only works when run against that node. The experiment answers one question: whether a generic EIP-style precompile family for octic extension-field multiplication and squaring could remove meaningful gas from the current octic verifier without changing the proof system.
+
+Detailed runner setup, precompile addresses, calibration procedures, harness commands, and subsystem measurements live in [sol-spartan-whir/README.md](sol-spartan-whir/README.md#precompile-backed-octic-experiment). The root README keeps the cross-workspace conclusion and the headline full-verifier numbers.
+
+The experiment does not change:
+
+- WHIR protocol parameters
+- verifier external ABI
+- proof blob format
+- transcript ordering
+- Merkle tree layout
+- calldata encoding
+- the baseline octic verifier source (the one that runs on standard EVM, with no custom precompiles)
+
+Current conclusion:
+
+- `EXT8_MUL` and `EXT8_SQUARE` save enough gas to justify building the precompile-backed verifier variant at all.
+- `EXT8_MUL_BATCH` helps in the fixed equality evaluator, where many independent ext8 multiplications can be grouped into a single batch call instead of one `STATICCALL` per multiplication.
+- `EXT8_ADD`, `EXT8_SUB`, `EXT8_MUL_BASE`, `EXT8_SQUARE_BATCH`, and `EXT8_MUL_BASE_BATCH` do not produce a measurable net benefit in the integrated verifier and are not used.
+- Purpose-built precompiles that fuse multiple WHIR-specific verifier steps into a single call are out of scope. The goal is a general-purpose ext8 precompile family that any verifier over KoalaBear could use, not a Spartan-WHIR-shaped primitive.
+- The baseline octic verifier (standard EVM) remains the canonical Solidity verifier. The precompile-backed verifier is a side-by-side comparison build used only to measure what the precompiles would save; it requires the patched Anvil node from `foundry-b0a9dd9/`.
+
+The full-verifier comparison on the patched node is:
+
+| Verifier                               | Total tx gas | Calldata gas | Execution gas |
+| -------------------------------------- | ------------ | ------------ | ------------- |
+| baseline octic (standard EVM)          | `8,095,104`  | `753,800`    | `7,320,304`   |
+| precompile-backed octic (patched node) | `5,057,190`  | `753,800`    | `4,282,390`   |
+| savings                                | `3,037,914`  | `0`          | `3,037,914`   |
+
+The Rust precompile implementation calls Plonky3 field types directly:
+
+- `p3_koala_bear::KoalaBear`
+- `p3_field::extension::BinomialExtensionField<KoalaBear, 8>`
+
+It intentionally does not depend on the `spartan-whir` workspace crate and does not re-implement ext8 multiplication by hand.
+
 ### Assessed protocol-level / proof-format optimizations (future work plus one historical experiment)
 
 This section is intentionally about changes beyond the verifier-only passes documented above. Most of the non-protocol structural optimizations that were previously "future" have already been implemented in the current branch; what remains here is protocol work, proof-format work, or historical experiment data kept for reference.

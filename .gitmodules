@@ -22,3 +22,7 @@
 [submodule "spartan-whir-export"]
 	path = spartan-whir-export
 	url = https://github.com/alxkzmn/spartan-whir-export.git
+[submodule "foundry-b0a9dd9"]
+	path = foundry-b0a9dd9
+	url = https://github.com/alxkzmn/foundry.git
+	branch = codex/ext8-precompile-runner

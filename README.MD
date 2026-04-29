@@ -1,6 +1,6 @@
 # Spartan-WHIR Solidity Verifier
 
-This README is the canonical root document for the Solidity verifier work in this workspace. It contains the reviewed implementation guide, locked decisions, stage sequencing, source-of-truth boundaries, and the current branch state.
+This README is the canonical root document for the Solidity verifier work in this workspace. It contains the reviewed implementation guide, locked decisions, implementation order, source-of-truth boundaries, and the current branch state.
 
 ## Stage Status
 
@@ -14,6 +14,14 @@ This README is the canonical root document for the Solidity verifier work in thi
 | Stage 5: Full Spartan verifier (outer/inner sumcheck + circuit-specific generated constants)                                             | pending   |
 | Stage 6: Spartan-specific and deployment-path optimization with A/B comparisons                                                          | pending   |
 | Stage 7: Full-Spartan blob wrapper + calldata benchmarking                                                                               | pending   |
+
+### Quintic Trinomial Verifier Status
+
+#### Current state as of 2026-04-29
+
+We are evaluating a quintic standalone-WHIR verifier over `QuinticTrinomialExtensionField<KoalaBear>` using `X^5 + X^2 - 1`.
+
+The field invariant that matters for Solidity is the transcript image: five coefficient-order little-endian `u32` values, exactly 20 bytes. Schedule-search notes and commands are in `sol-spartan-whir/README.md`.
 
 ## Background
 
@@ -32,7 +40,7 @@ The goal of this document is to build a **Solidity verifier** for this proof sys
 - `./whir-p3/` -- Rust WHIR library used by `spartan-whir`. Contains the WHIR verifier (`whir/verifier/mod.rs`), sumcheck verifier (`whir/verifier/sumcheck.rs`), Merkle multiproof verification (`whir/merkle_multiproof.rs`), proof types (`whir/proof.rs`), and expanded config derivation (`whir/parameters.rs`).
 - `./Plonky3/` -- Vendored Plonky3 library. Contains the KoalaBear field definition (`koala-bear/src/koala_bear.rs`) and extension field arithmetic (`field/src/extension/binomial_extension.rs`).
 - `./sol-whir/` -- An older Solidity verifier for a **different** version of WHIR over the BN254 field. Useful as a **structural reference** for Foundry project layout, gas measurement patterns, Merkle queue-based multiproof verification, and test harness design. **Not usable as a logic source** because its WHIR state machine matches the older `whir-old` Rust implementation, not the current `whir-p3`.
-- `./whir-old/` -- Older Rust WHIR implementation (BN254-based). Only useful as a workflow reference for the fixture export pipeline. Not a schema or logic reference.
+- `./whir-old/` -- Older Rust WHIR implementation (BN254-based). Only useful as a workflow reference for fixture export. Not a schema or logic reference.
 
 ## Summary
 
@@ -72,12 +80,12 @@ The internal architecture supports **octic (degree-8) extensions from the start*
 - Merkle multiproof algorithm: [whir-p3/src/whir/merkle_multiproof.rs](whir-p3/src/whir/merkle_multiproof.rs)
 - Extension field constants and arithmetic: [Plonky3/koala-bear/src/koala_bear.rs](Plonky3/koala-bear/src/koala_bear.rs), [Plonky3/field/src/extension/binomial_extension.rs](Plonky3/field/src/extension/binomial_extension.rs)
 
-**Use `./whir-old/` proof-converter only as a workflow reference** for how fixture export pipelines are structured. It is not a schema or format reference for the current proof format.
+**Use `./whir-old/` proof-converter only as a workflow reference** for how fixture export is structured. It is not a schema or format reference for the current proof format.
 
 ## Locked Decisions
 
 - **Fresh implementation.** Do not refactor `./sol-whir/` in place. Write new Solidity code, referencing `./sol-whir/` only for structural patterns.
-- **Typed ABI first.** The first working verifier uses Solidity structs with standard ABI encoding. The Rust exporter produces binary `abi.encode(...)` payloads using the `alloy-sol-types` library. Solidity tests load these via `vm.readFileBinary` and decode with `abi.decode(...)`. The current standalone-WHIR track also carries a dedicated standalone blob format in Stage 4, with both a wrapper verifier and a native blob verifier. Full-Spartan blob support is later-stage work in Stage 7.
+- **Typed ABI first.** The first working verifier uses Solidity structs with standard ABI encoding. The Rust exporter produces binary `abi.encode(...)` payloads using the `alloy-sol-types` library. Solidity tests load these via `vm.readFileBinary` and decode with `abi.decode(...)`. The standalone-WHIR verifier also has a dedicated blob format with both a wrapper verifier and a native verifier. Full-Spartan blob support is deferred.
 - **Standalone WHIR first.** Build and validate the WHIR polynomial commitment verifier before adding the Spartan layer. The WHIR verifier is the more complex component and accounts for most of the gas cost.
 - **Quartic first, octic second.** Quartic extensions (4 coefficients per element) are simpler to implement and debug. Octic extensions (8 coefficients) are added before the full Spartan verifier is considered complete.
 - **Two concrete verifier families via template-generated specialization.** Solidity has no generics. Extension-dependent modules (`WhirVerifierCore`, `WhirSumcheck`, `SpartanSumcheck`) are written as templates with a placeholder extension library import. The `spartan-whir-export` crate performs simple string substitution to produce two specialized copies (e.g., `WhirVerifierCore4.sol` and `WhirVerifierCore8.sol`) with the correct extension library wired at code-generation time. Extension-independent modules (`KeccakChallenger`, `MerkleVerifier`, `KoalaBear`, `SpartanEvaluator`) are shared. There is no runtime branching or virtual function dispatch on extension degree.
@@ -88,7 +96,7 @@ The internal architecture supports **octic (degree-8) extensions from the start*
 
 ## Typed ABI Schema (Frozen)
 
-All Solidity-facing proof and config structs are defined in Stage 0 before the Rust exporter is built. Both sides target the same schema. The Rust exporter and Solidity verifier must agree on these definitions exactly.
+All Solidity-facing proof and config structs are defined before the Rust exporter is built. Both sides target the same schema. The Rust exporter and Solidity verifier must agree on these definitions exactly.
 
 ### Encoding conventions
 
@@ -276,7 +284,7 @@ Both quartic and octic extensions use the binomial irreducible polynomial X^d - 
   2. Compute `keccak256(preimage)` to produce a 32-byte digest.
   3. Observe that **32-byte digest** (as a `Hash<F, u8, 32>` object) into the challenger. Do **not** observe the raw 76-byte preimage.
   4. Observe each public input as a base-field element.
-- WHIR domain-separator observation: Stage 0 exports the exact WHIR Fiat-Shamir pattern for each config. The fixed-config verifiers bake this pattern as a compile-time constant generated from Rust.
+- WHIR domain-separator observation: the Rust exporter emits the exact WHIR Fiat-Shamir pattern for each config. The fixed-config verifiers bake this pattern as a compile-time constant generated from Rust.
 - Tests must compare observe-sequence parity, challenge-sequence parity, and full checkpoint parity against fixed Rust-generated fixtures.
 
 ### Stage 3: Merkle layer
@@ -548,7 +556,7 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
     - current blob layout:
       - transcript-native canonical little-endian bytes for initial/per-round OOD answers, all sumcheck polynomial evaluations, round/final PoW witnesses, and round1 sumcheck PoW witnesses
       - commitments, decommitments, Merkle query rows, statement data, and the final polynomial remain on the existing Merkle/arithmetic-friendly layout
-- the measured changes below show how the verifier moved from earlier milestones to the current state
+- the measured changes below show how the verifier reached the current state
 - canonical transcript change in stage4:
   - replace the Rust-side `SerializingChallenger32` alias in `spartan-whir` with a local API-compatible canonical challenger that observes field elements as `as_canonical_u32().to_le_bytes()`
   - keep `whir-p3` unchanged
@@ -719,7 +727,7 @@ Current conclusion:
 - `EXT8_MUL_BATCH` helps in the fixed equality evaluator, where many independent ext8 multiplications can be grouped into a single batch call instead of one `STATICCALL` per multiplication.
 - `EXT8_ADD`, `EXT8_SUB`, `EXT8_MUL_BASE`, `EXT8_SQUARE_BATCH`, and `EXT8_MUL_BASE_BATCH` do not produce a measurable net benefit in the integrated verifier and are not used.
 - Purpose-built precompiles that fuse multiple WHIR-specific verifier steps into a single call are out of scope. The goal is a general-purpose ext8 precompile family that any verifier over KoalaBear could use, not a Spartan-WHIR-shaped primitive.
-- The baseline octic verifier (standard EVM) remains the canonical Solidity verifier. The precompile-backed verifier is a side-by-side comparison build used only to measure what the precompiles would save; it requires the patched Anvil node from `foundry-b0a9dd9/`.
+- The baseline octic verifier (standard EVM) remains the canonical Solidity verifier. The precompile-backed verifier is a separate comparison build used only to measure what the precompiles would save; it requires the patched Anvil node from `foundry-b0a9dd9/`.
 
 The full-verifier comparison on the patched node is:
 
@@ -1020,20 +1028,20 @@ graph TD
 
 - Use Foundry's `vm.startSnapshotGas` / `vm.stopSnapshotGas` around the verifier call.
 - Report per benchmark: **execution gas**, **calldata size in bytes**, **calldata gas cost estimate**, **total estimated transaction cost**.
-- Also keep one direct transaction benchmark for the fixed verifier using a broadcast script against a local Anvil node, so we track the actual user-paid `EOA -> verify(...)` transaction gas in addition to the in-test call-path benchmark.
+- Also keep one direct transaction benchmark for the fixed verifier using a broadcast script against a local Anvil node, so we record the actual user-paid `EOA -> verify(...)` transaction gas in addition to the in-test call-path benchmark.
 - Separate benchmark families: quartic standalone WHIR, octic standalone WHIR, quartic full Spartan, octic full Spartan.
 - Use fixed Rust-generated benchmark fixtures so all gas comparisons use identical inputs.
-- Track typed-ABI, blob-wrapper, and blob-native results separately once those entry points exist. On the standalone track, this now includes both standalone blob verifiers.
+- Record typed-ABI, blob-wrapper, and blob-native results separately once those entry points exist. For standalone WHIR, this now includes both standalone blob verifiers.
 
 ## Assumptions
 
-- First correctness milestone is **quartic standalone WHIR**.
+- First correctness target is **quartic standalone WHIR**.
 - Octic support is required in the near term. The internal architecture supports it from the start.
 - Quartic and octic verifiers are separate concrete contracts, not one contract branching at runtime.
 - Standalone WHIR uses fixed-config verifiers only; Rust derives the schedule and emits generated Solidity constants for the chosen configuration.
 - The full Spartan verifier is circuit-specific, with Rust-generated Solidity constants.
 - Baseline evaluator: shared generic library with COO data-source abstraction. Inline constants for small test circuits, auxiliary data contracts for realistic circuits. Not replaced with unrolled code unless gas measurements require it.
-- The typed ABI with `abi.encode`/`abi.decode` is the first correctness path. The standalone-WHIR track now also has a standalone blob decoding path; full-Spartan blob decoding remains a later calldata optimization.
+- The typed ABI with `abi.encode`/`abi.decode` is the first correctness path. Standalone WHIR now also has a standalone blob decoding path; full-Spartan blob decoding remains a later calldata optimization.
 - `./sol-whir/` is a structural reference only, not a logic source. `./whir-p3/` and `./spartan-whir/` are the logic sources.
 - The WHIR Fiat-Shamir domain-separator pattern is exported from Rust and provided as a constant or runtime input. It is not re-derived in Solidity.
 - The Spartan domain-separator is stored as a precomputed 32-byte hash constant in generated code. The 76-byte preimage is exported separately for parity tests only.
@@ -1043,5 +1051,5 @@ graph TD
 - The WHIR Fiat-Shamir domain-separator pattern is exported from Rust and baked into generated Solidity constants. It is not provided as a runtime ABI field.
 - Build and verify against `spartan-whir` without the `keccak_no_prefix` feature flag (default behavior: Keccak leaf and node hashing uses domain-separation prefix bytes `0x00` and `0x01`).
 - STIR query index sorting uses Solady's `LibSort` or an equivalent sorting library. Sorting gas is a known cost factor.
-- The WHIR Fiat-Shamir domain-separator pattern length should be recorded as part of Stage 0 fixture metadata for bytecode-size estimation.
+- The WHIR Fiat-Shamir domain-separator pattern length should be recorded in fixture metadata for bytecode-size estimation.
 - All extension-dependent Solidity files (`WhirVerifierCore`, `WhirSumcheck`, `SpartanSumcheck`) are template-generated into quartic and octic copies via simple string substitution in `spartan-whir-export`.

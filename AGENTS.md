@@ -2,7 +2,7 @@
 
 ## Current Work: Solidity Verifier for Spartan-WHIR
 
-The primary active task is building a Solidity (EVM) verifier for the Spartan-WHIR SNARK. The canonical root document lives at:
+The primary active task is building a Solidity (EVM) verifier for the Spartan-WHIR SNARK. The canonical root document is:
 
 - **`./README.md`** -- this is the canonical, reviewed root document for the verifier work. If you need to make changes to the project plan, always write them to `./README.md` so it stays current.
 

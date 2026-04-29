@@ -19,9 +19,32 @@ This README is the canonical root document for the Solidity verifier work in thi
 
 #### Current state as of 2026-04-29
 
-We are evaluating a quintic standalone-WHIR verifier over `QuinticTrinomialExtensionField<KoalaBear>` using `X^5 + X^2 - 1`.
+We are building a quintic standalone-WHIR verifier over
+`QuinticTrinomialExtensionField<KoalaBear>` using `X^5 + X^2 - 1`.
 
-The field invariant that matters for Solidity is the transcript image: five coefficient-order little-endian `u32` values, exactly 20 bytes. Schedule-search notes and commands are in `sol-spartan-whir/README.md`.
+The selected build target is `k22_jb100_ext5_lir4_ff4_rsv4`:
+
+- `num_variables = 22`
+- `pow_bits = 27`
+- `FoldingFactor::Constant(4)`
+- `starting_log_inv_rate = 4`
+- `rs_domain_initial_reduction_factor = 4`
+- measured prover time: `133.516761291s`
+- native blob verifier gas: `8,461,452` as measured by Foundry, and
+  `8,551,179` total transaction gas on Anvil. Of that transaction gas,
+  `7,587,919` is pure execution gas (the `21,000` transaction base cost and
+  the calldata cost have been subtracted).
+
+The native blob verifier is the canonical Solidity target. The typed ABI
+verifier and the decoded blob wrapper remain parity and debugging paths.
+The remaining gas gap against the existing octic native verifier is driven
+by schedule shape, not by implementation overhead: this quintic verifier
+opens `116` query rows and `1856` row values, while the octic reference
+opens `62` query rows and `992` row values.
+
+The field invariant that matters for Solidity is the transcript image: five
+coefficient-order little-endian `u32` values, exactly 20 bytes. Schedule-search
+notes and commands are in `sol-spartan-whir/README.md`.
 
 ## Background
 

@@ -39,9 +39,9 @@ The native blob verifier is the canonical Solidity target. The typed ABI
 verifier and the decoded blob wrapper remain parity and debugging paths.
 The previous quintic build target, `k22_jb100_ext5_lir4_ff4_rsv4`, is still
 checked in for comparison. It used `pow_bits = 27`, measured
-`133.516761291s` prover time, and measured `8,551,179` total native
+`133.516761291s` prover time, and measured `6,822,886` total native
 transaction gas on Anvil. The current `rsv3_pow28` target reduces native
-transaction gas by about `29.6%` and increases measured prover time by
+transaction gas by about `11.7%` and increases measured prover time by
 about `105%`.
 
 The field invariant that matters for Solidity is the transcript image: five
@@ -702,6 +702,13 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
     - octic native total tx gas: `8,146,817 -> 8,143,089` (`-3,728`)
     - replace `new bytes(newCapacity)` in `KeccakChallenger._ensureCapacity(...)` with raw allocation, match the single-value ext8 transcript read path to the already-optimized pair reader, and mark the remaining safe shared assembly blocks as `assembly ("memory-safe")`
     - attempted Solady-style conditional-reduction rewrites for `KoalaBearExt4.add/sub` and `KoalaBearExt8.add/sub` regressed under `via_ir` and were reverted
+  - depth-4 equality-monomial row-evaluation rewrite:
+    - quintic `rsv4` native blob: `8,461,314 -> 6,733,159` (`-1,728,155`)
+    - quintic `rsv4` native total tx gas: `8,551,179 -> 6,822,886` (`-1,728,293`)
+    - octic native blob: `7,861,397 -> 7,383,992` (`-477,405`)
+    - octic native total tx gas: `8,143,089 -> 7,665,684` (`-477,405`)
+    - precompute the 16 equality monomial weights for each depth-4 STIR row evaluation, then evaluate rows as a dot product instead of repeatedly walking the binary fold tree
+    - the same rewrite was tested on the quartic `lir6` native verifier and reverted because it regressed gas (`899,906 -> 1,096,553`)
   - rejected constant-factor candidate:
     - increasing `INITIAL_CAPACITY` in `KeccakChallenger` from 64 to 512: saved only `141` gas with `+8` bytes bytecode; the doubling-array pattern is already cheap and `duplexing()` resets the buffer frequently
   - conclusion:

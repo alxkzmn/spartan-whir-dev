@@ -17,30 +17,32 @@ This README is the canonical root document for the Solidity verifier work in thi
 
 ### Quintic Trinomial Verifier Status
 
-#### Current state as of 2026-04-29
+#### Current state as of 2026-04-30
 
 We are building a quintic standalone-WHIR verifier over
 `QuinticTrinomialExtensionField<KoalaBear>` using `X^5 + X^2 - 1`.
 
-The selected build target is `k22_jb100_ext5_lir4_ff4_rsv4`:
+The current build target is `k22_jb100_ext5_lir4_ff4_rsv3_pow28`:
 
 - `num_variables = 22`
-- `pow_bits = 27`
+- `pow_bits = 28`
 - `FoldingFactor::Constant(4)`
 - `starting_log_inv_rate = 4`
-- `rs_domain_initial_reduction_factor = 4`
-- measured prover time: `133.516761291s`
-- native blob verifier gas: `8,461,452` as measured by Foundry, and
-  `8,551,179` total transaction gas on Anvil. Of that transaction gas,
-  `7,587,919` is pure execution gas (the `21,000` transaction base cost and
+- `rs_domain_initial_reduction_factor = 3`
+- measured prover time: `274.163664792s`
+- native blob verifier gas: `5,903,484` as measured by Foundry, and
+  `6,022,631` total transaction gas on Anvil. Of that transaction gas,
+  `5,145,295` is pure execution gas (the `21,000` transaction base cost and
   the calldata cost have been subtracted).
 
 The native blob verifier is the canonical Solidity target. The typed ABI
 verifier and the decoded blob wrapper remain parity and debugging paths.
-The remaining gas gap against the existing octic native verifier is driven
-by schedule shape, not by implementation overhead: this quintic verifier
-opens `116` query rows and `1856` row values, while the octic reference
-opens `62` query rows and `992` row values.
+The previous quintic build target, `k22_jb100_ext5_lir4_ff4_rsv4`, is still
+checked in for comparison. It used `pow_bits = 27`, measured
+`133.516761291s` prover time, and measured `8,551,179` total native
+transaction gas on Anvil. The current `rsv3_pow28` target reduces native
+transaction gas by about `29.6%` and increases measured prover time by
+about `105%`.
 
 The field invariant that matters for Solidity is the transcript image: five
 coefficient-order little-endian `u32` values, exactly 20 bytes. Schedule-search

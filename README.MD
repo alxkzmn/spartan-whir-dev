@@ -30,18 +30,18 @@ The current build target is `k22_jb100_ext5_lir4_ff4_rsv3_pow28`:
 - `starting_log_inv_rate = 4`
 - `rs_domain_initial_reduction_factor = 3`
 - measured prover time: `274.163664792s`
-- native blob verifier gas: `5,750,877` as measured by Foundry, and
-  `5,870,024` total transaction gas on Anvil. Of that transaction gas,
-  `4,992,688` is pure execution gas (the `21,000` transaction base cost and
+- native blob verifier gas: `5,613,844` as measured by Foundry, and
+  `5,732,991` total transaction gas on Anvil. Of that transaction gas,
+  `4,855,655` is pure execution gas (the `21,000` transaction base cost and
   the calldata cost have been subtracted).
 
 The native blob verifier is the canonical Solidity target. The typed ABI
 verifier and the decoded blob wrapper remain parity and debugging paths.
 The previous quintic build target, `k22_jb100_ext5_lir4_ff4_rsv4`, is still
 checked in for comparison. It used `pow_bits = 27`, measured
-`133.516761291s` prover time, and measured `6,673,297` total native
+`133.516761291s` prover time, and measured `6,544,154` total native
 transaction gas on Anvil. The current `rsv3_pow28` target reduces native
-transaction gas by about `12.0%` and increases measured prover time by
+transaction gas by about `12.4%` and increases measured prover time by
 about `105%`.
 
 The field invariant that matters for Solidity is the transcript image: five
@@ -709,12 +709,18 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
     - octic native total tx gas: `8,143,089 -> 7,665,684` (`-477,405`)
     - precompute the 16 equality monomial weights for each depth-4 STIR row evaluation, then evaluate rows as a dot product instead of repeatedly walking the binary fold tree
     - the same rewrite was tested on the quartic `lir6` native verifier and reverted because it regressed gas (`899,906 -> 1,096,553`)
-  - lazy-reduction quintic dot product:
+  - lazy-reduction quintic dot products:
     - current quintic `rsv3_pow28` native blob: `5,903,484 -> 5,750,877` (`-152,607`)
     - current quintic `rsv3_pow28` native total tx gas: `6,022,631 -> 5,870,024` (`-152,607`)
     - quintic `rsv4` native blob: `6,733,159 -> 6,583,570` (`-149,589`)
     - quintic `rsv4` native total tx gas: `6,822,886 -> 6,673,297` (`-149,589`)
-    - for extension-row STIR dot products, unpack the 16 precomputed equality weights once and accumulate the raw quintic convolution channels before one final reduction; base rows keep the packed-weight path
+    - for extension-row STIR dot products, unpack the 16 precomputed equality weights once and accumulate the raw quintic convolution channels before one final reduction
+    - base-row lazy dot product:
+      - current quintic `rsv3_pow28` native blob: `5,750,877 -> 5,613,844` (`-137,033`)
+      - current quintic `rsv3_pow28` native total tx gas: `5,870,024 -> 5,732,991` (`-137,033`)
+      - quintic `rsv4` native blob: `6,583,570 -> 6,454,427` (`-129,143`)
+      - quintic `rsv4` native total tx gas: `6,673,297 -> 6,544,154` (`-129,143`)
+      - keep the packed equality-weight buffer for base rows, but accumulate the 16 scalar-times-ext5-weight products into five raw coefficient sums before one final reduction
   - rejected constant-factor candidate:
     - increasing `INITIAL_CAPACITY` in `KeccakChallenger` from 64 to 512: saved only `141` gas with `+8` bytes bytecode; the doubling-array pattern is already cheap and `duplexing()` resets the buffer frequently
   - conclusion:

@@ -788,6 +788,24 @@ The Rust precompile implementation calls Plonky3 field types directly:
 
 It intentionally does not depend on the `spartan-whir` workspace crate and does not re-implement ext8 multiplication by hand.
 
+### Local KoalaBear Ext5 Arithmetic Precompile Work
+
+The Solidity project also includes an experimental quintic verifier variant that calls local KoalaBear ext5 precompiles registered with the patched Anvil node. This is the same comparison-only setup as the octic experiment: the baseline quintic verifier remains the canonical standard-EVM path, and the precompile-backed verifier is a parallel `view` variant used to measure whether generic ext5 multiplication and squaring precompiles would be worth standardizing.
+
+Detailed runner setup, precompile addresses, calibration procedures, harness commands, and subsystem measurements live in [sol-spartan-whir/README.md](sol-spartan-whir/README.md#quintic-precompile-experiment).
+
+The experiment does not change WHIR protocol parameters, verifier external ABI, proof blob format, transcript ordering, Merkle tree layout, calldata encoding, or the baseline quintic verifier source.
+
+The full-verifier comparison on the patched node is:
+
+| Verifier                               | Total tx gas |
+| -------------------------------------- | ------------ |
+| baseline quintic `rsv3_pow28`          | `5,732,991`  |
+| precompile-backed quintic `rsv3_pow28` | `5,486,961`  |
+| savings                                | `246,030`    |
+
+This is useful for the current quintic target, but the saving is much smaller than the octic precompile saving because optimized quintic software arithmetic is already substantially cheaper than octic software arithmetic. The saving is below the threshold for immediately producing a precompile-backed variant of the older `rsv4` quintic verifier.
+
 ### Assessed protocol-level / proof-format optimizations (future work plus one historical experiment)
 
 This section is intentionally about changes beyond the verifier-only passes documented above. Most of the non-protocol structural optimizations that were previously "future" have already been implemented in the current branch; what remains here is protocol work, proof-format work, or historical experiment data kept for reference.

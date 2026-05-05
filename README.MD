@@ -540,6 +540,9 @@ Once quartic standalone WHIR correctness is passing and the first gas profile ex
 #### Current Phase Profile
 
 Measured with `forge test --match-test testProfileFullBreakdown -vv`.
+The cross-schedule coverage map for transaction calldata and phase-level gas
+rows across the quartic, quintic, and octic verifier families is maintained in
+[`sol-spartan-whir/docs/verifier-gas-breakdown-matrix.md`](sol-spartan-whir/docs/verifier-gas-breakdown-matrix.md).
 
     | Component               |       Gas |
     | ----------------------- | --------: |

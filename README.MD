@@ -793,7 +793,7 @@ It intentionally does not depend on the `spartan-whir` workspace crate and does 
 
 ### Local KoalaBear Ext5 Arithmetic Precompile Work
 
-The Solidity project also includes an experimental quintic verifier variant that calls local KoalaBear ext5 precompiles registered with the patched Anvil node. This is the same comparison-only setup as the octic experiment: the baseline quintic verifier remains the canonical standard-EVM path, and the precompile-backed verifier is a parallel `view` variant used to measure whether generic ext5 multiplication and squaring precompiles would be worth standardizing.
+The Solidity project also includes an experimental quintic verifier variant that calls local KoalaBear ext5 precompiles registered with the patched Anvil node. This is the same comparison-only setup as the octic experiment: the baseline quintic verifier remains the canonical standard-EVM path, and the precompile-backed verifier is a parallel `view` variant used to measure scalar, batch, and vector multiply-accumulate ext5 precompile shapes.
 
 Detailed runner setup, precompile addresses, calibration procedures, harness commands, and subsystem measurements live in [sol-spartan-whir/README.md](sol-spartan-whir/README.md#quintic-precompile-experiment).
 
@@ -804,10 +804,10 @@ The full-verifier comparison on the patched node is:
 | Verifier                               | Total tx gas |
 | -------------------------------------- | ------------ |
 | baseline quintic `rsv3_pow28`          | `5,732,991`  |
-| precompile-backed quintic `rsv3_pow28` | `5,486,961`  |
-| savings                                | `246,030`    |
+| precompile-backed quintic `rsv3_pow28` | `4,725,482`  |
+| savings                                | `1,007,509`  |
 
-This is useful for the current quintic target, but the saving is much smaller than the octic precompile saving because optimized quintic software arithmetic is already substantially cheaper than octic software arithmetic. The saving is below the threshold for immediately producing a precompile-backed variant of the older `rsv4` quintic verifier.
+This is useful for the current quintic target and reflects the new extension-field vector multiply-accumulate precompile used by the extension-row dot products. A precompile-backed variant of the older `rsv4` quintic verifier remains a separate port and must be measured independently.
 
 ### Assessed protocol-level / proof-format optimizations (future work plus one historical experiment)
 

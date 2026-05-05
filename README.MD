@@ -804,8 +804,8 @@ The full-verifier comparison on the patched node is:
 | Verifier                               | Total tx gas |
 | -------------------------------------- | ------------ |
 | baseline quintic `rsv3_pow28`          | `5,732,991`  |
-| precompile-backed quintic `rsv3_pow28` | `4,725,482`  |
-| savings                                | `1,007,509`  |
+| precompile-backed quintic `rsv3_pow28` | `4,735,480`  |
+| savings                                | `997,511`    |
 
 This is useful for the current quintic target and reflects the new extension-field vector multiply-accumulate precompile used by the extension-row dot products. A precompile-backed variant of the older `rsv4` quintic verifier remains a separate port and must be measured independently.
 

@@ -17,7 +17,7 @@ This README is the canonical root document for the Solidity verifier work in thi
 
 ### Quintic Trinomial Verifier Status
 
-#### Current state as of 2026-04-30
+#### Current state as of 2026-05-05
 
 We are building a quintic standalone-WHIR verifier over
 `QuinticTrinomialExtensionField<KoalaBear>` using `X^5 + X^2 - 1`.
@@ -30,19 +30,19 @@ The current build target is `k22_jb100_ext5_lir4_ff4_rsv3_pow28`:
 - `starting_log_inv_rate = 4`
 - `rs_domain_initial_reduction_factor = 3`
 - measured prover time: `274.163664792s`
-- native blob verifier gas: `5,613,844` as measured by Foundry, and
-  `5,732,991` total transaction gas on Anvil. Of that transaction gas,
-  `4,855,655` is pure execution gas (the `21,000` transaction base cost and
+- native blob verifier gas: `5,526,933` as measured by Foundry, and
+  `5,646,080` total transaction gas on Anvil. Of that transaction gas,
+  `4,768,744` is pure execution gas (the `21,000` transaction base cost and
   the calldata cost have been subtracted).
 
 The native blob verifier is the canonical Solidity target. The typed ABI
 verifier and the decoded blob wrapper remain parity and debugging paths.
 The previous quintic build target, `k22_jb100_ext5_lir4_ff4_rsv4`, is still
 checked in for comparison. It used `pow_bits = 27`, measured
-`133.516761291s` prover time, and measured `6,544,154` total native
+`133.516761291s` prover time, and measured `6,447,048` total native
 transaction gas on Anvil. The current `rsv3_pow28` target reduces native
-transaction gas by about `12.4%` and increases measured prover time by
-about `105%`.
+transaction gas by about `12.4%` and increases measured prover time by about
+`105%`.
 
 The field invariant that matters for Solidity is the transcript image: five
 coefficient-order little-endian `u32` values, exactly 20 bytes. Schedule-search
@@ -712,6 +712,10 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
     - octic native total tx gas: `8,143,089 -> 7,665,684` (`-477,405`)
     - precompute the 16 equality monomial weights for each depth-4 STIR row evaluation, then evaluate rows as a dot product instead of repeatedly walking the binary fold tree
     - the same rewrite was tested on the quartic `lir6` native verifier and reverted because it regressed gas (`899,906 -> 1,096,553`)
+  - lazy-reduction octic row dot products:
+    - octic native blob: `7,383,992 -> 6,908,778` (`-475,214`)
+    - octic native total tx gas: `7,665,684 -> 7,190,470` (`-475,214`)
+    - for extension-row STIR dot products, unpack the 16 precomputed equality weights once and accumulate the raw octic channels before one final reduction
   - lazy-reduction quintic dot products:
     - current quintic `rsv3_pow28` native blob: `5,903,484 -> 5,750,877` (`-152,607`)
     - current quintic `rsv3_pow28` native total tx gas: `6,022,631 -> 5,870,024` (`-152,607`)
@@ -724,6 +728,13 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
       - quintic `rsv4` native blob: `6,583,570 -> 6,454,427` (`-129,143`)
       - quintic `rsv4` native total tx gas: `6,673,297 -> 6,544,154` (`-129,143`)
       - keep the packed equality-weight buffer for base rows, but accumulate the 16 scalar-times-ext5-weight products into five raw coefficient sums before one final reduction
+    - pairwise constraint-select evaluation:
+      - current quintic `rsv3_pow28` native blob: `5,613,844 -> 5,526,933` (`-86,911`)
+      - current quintic `rsv3_pow28` native total tx gas: `5,732,991 -> 5,646,080` (`-86,911`)
+      - quintic `rsv4` native blob: `6,454,427 -> 6,357,321` (`-97,106`)
+      - quintic `rsv4` native total tx gas: `6,544,154 -> 6,447,048` (`-97,106`)
+      - evaluate two select terms per loop so both products share each loaded `fullPoint` element
+      - the same source-level rewrite was tested on the octic native verifier and reverted because it regressed gas (`7,383,992 -> 7,940,820`)
   - rejected constant-factor candidate:
     - increasing `INITIAL_CAPACITY` in `KeccakChallenger` from 64 to 512: saved only `141` gas with `+8` bytes bytecode; the doubling-array pattern is already cheap and `duplexing()` resets the buffer frequently
   - conclusion:
@@ -780,9 +791,9 @@ The full-verifier comparison on the patched node is:
 
 | Verifier                               | Total tx gas | Calldata gas | Execution gas |
 | -------------------------------------- | ------------ | ------------ | ------------- |
-| baseline octic (standard EVM)          | `8,095,104`  | `753,800`    | `7,320,304`   |
-| precompile-backed octic (patched node) | `5,057,190`  | `753,800`    | `4,282,390`   |
-| savings                                | `3,037,914`  | `0`          | `3,037,914`   |
+| baseline octic (standard EVM)          | `7,190,470`  | `753,800`    | `6,415,670`   |
+| precompile-backed octic (patched node) | `4,722,241`  | `753,800`    | `3,947,441`   |
+| savings                                | `2,468,229`  | `0`          | `2,468,229`   |
 
 The Rust precompile implementation calls Plonky3 field types directly:
 
@@ -803,11 +814,11 @@ The full-verifier comparison on the patched node is:
 
 | Verifier                               | Total tx gas |
 | -------------------------------------- | ------------ |
-| baseline quintic `rsv3_pow28`          | `5,732,991`  |
-| precompile-backed quintic `rsv3_pow28` | `4,735,480`  |
-| savings                                | `997,511`    |
+| baseline quintic `rsv3_pow28`          | `5,646,080`  |
+| precompile-backed quintic `rsv3_pow28` | `4,386,546`  |
+| savings                                | `1,259,534`  |
 
-This is useful for the current quintic target and reflects the new extension-field vector multiply-accumulate precompile used by the extension-row dot products. A precompile-backed variant of the older `rsv4` quintic verifier remains a separate port and must be measured independently.
+This is useful for the current quintic target and reflects the extension-field vector multiply-accumulate precompile used by the extension-row dot products, plus the pairwise constraint-select evaluation used by both the software and precompile-backed quintic paths. A precompile-backed variant of the older `rsv4` quintic verifier remains a separate port and must be measured independently.
 
 ### Assessed protocol-level / proof-format optimizations (future work plus one historical experiment)
 

@@ -805,7 +805,7 @@ It intentionally does not depend on the `spartan-whir` workspace crate and does 
 
 ### Local KoalaBear Ext5 Arithmetic Precompile Work
 
-The Solidity project also includes an experimental quintic verifier variant that calls local KoalaBear ext5 precompiles registered with the patched Anvil node. This is the same comparison-only setup as the octic experiment: the baseline quintic verifier remains the canonical standard-EVM path, and the precompile-backed verifier is a parallel `view` variant used to measure scalar, batch, and vector multiply-accumulate ext5 precompile shapes.
+The Solidity project also includes an experimental quintic verifier variant that calls local KoalaBear ext5 precompiles registered with the patched Anvil node. This is the same comparison-only setup as the octic experiment: the baseline quintic verifier remains the canonical standard-EVM path, and the precompile-backed verifier is a parallel `view` variant used to measure scalar, batch, multiply-accumulate, and linear-product extension-field precompile shapes.
 
 Detailed runner setup, precompile addresses, calibration procedures, harness commands, and subsystem measurements live in [sol-spartan-whir/README.md](sol-spartan-whir/README.md#quintic-precompile-experiment).
 
@@ -816,10 +816,12 @@ The full-verifier comparison on the patched node is:
 | Verifier                               | Total tx gas |
 | -------------------------------------- | ------------ |
 | baseline quintic `rsv3_pow28`          | `5,646,080`  |
-| precompile-backed quintic `rsv3_pow28` | `4,386,546`  |
-| savings                                | `1,259,534`  |
+| precompile-backed quintic `rsv3_pow28` | `4,328,805`  |
+| savings                                | `1,317,275`  |
 
 This is useful for the current quintic target and reflects the extension-field vector multiply-accumulate precompile used by the extension-row dot products, plus the pairwise constraint-select evaluation used by both the software and precompile-backed quintic paths. A precompile-backed variant of the older `rsv4` quintic verifier remains a separate port and must be measured independently.
+
+`EXTFIELD_LIN_PROD` was also prototyped for select-product chains as an EIP-style small-prime extension-field primitive. It validated cleanly, but it is not wired into the verifier because the current quintic chain sizes are too small for the transport cost: the weighted projection was `-104,698` gas against the existing software select-product kernels.
 
 ### Assessed protocol-level / proof-format optimizations (future work plus one historical experiment)
 

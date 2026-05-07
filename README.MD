@@ -765,7 +765,7 @@ Measured with `forge test --match-test testProfileStirBreakdown -vv`.
 
 ### Local KoalaBear Ext8 Arithmetic Precompile Work
 
-The Solidity project includes an experimental octic verifier variant that calls custom EVM precompiles for KoalaBear ext8 arithmetic. The precompiles are not part of mainnet Ethereum; they are served by a patched Anvil node vendored under `foundry-b0a9dd9/`, and the verifier variant only works when run against that node. The experiment answers one question: whether a generic EIP-style precompile family for octic extension-field multiplication and squaring could remove meaningful gas from the current octic verifier without changing the proof system.
+The Solidity project includes an experimental octic verifier variant that calls custom EVM precompiles for KoalaBear ext8 arithmetic. The precompiles are not part of mainnet Ethereum; they are served by a patched Anvil node vendored under `foundry-b0a9dd9/`, and the verifier variant only works when run against that node. The experiment answers one question: whether a generic EIP-style precompile family for octic extension-field multiplication, squaring, and vector multiply-accumulate could remove meaningful gas from the current octic verifier without changing the proof system.
 
 Detailed runner setup, precompile addresses, calibration procedures, harness commands, and subsystem measurements live in [sol-spartan-whir/README.md](sol-spartan-whir/README.md#precompile-backed-octic-experiment). The root README keeps the cross-workspace conclusion and the headline full-verifier numbers.
 
@@ -783,6 +783,7 @@ Current conclusion:
 
 - `EXT8_MUL` and `EXT8_SQUARE` save enough gas to justify building the precompile-backed verifier variant at all.
 - `EXT8_MUL_BATCH` helps in the fixed equality evaluator, where many independent ext8 multiplications can be grouped into a single batch call instead of one `STATICCALL` per multiplication.
+- `EXTFIELD_MAC` helps in STIR extension-row evaluation, where each row is a 16-term extension-field dot product. The current precompile-backed verifier uses one `EXTFIELD_MAC(n = 16)` call per extension row instead of the previous fold-tree sequence of singleton ext8 multiplication calls.
 - `EXT8_ADD`, `EXT8_SUB`, `EXT8_MUL_BASE`, `EXT8_SQUARE_BATCH`, and `EXT8_MUL_BASE_BATCH` do not produce a measurable net benefit in the integrated verifier and are not used.
 - Purpose-built precompiles that fuse multiple WHIR-specific verifier steps into a single call are out of scope. The goal is a general-purpose ext8 precompile family that any verifier over KoalaBear could use, not a Spartan-WHIR-shaped primitive.
 - The baseline octic verifier (standard EVM) remains the canonical Solidity verifier. The precompile-backed verifier is a separate comparison build used only to measure what the precompiles would save; it requires the patched Anvil node from `foundry-b0a9dd9/`.
@@ -792,8 +793,8 @@ The full-verifier comparison on the patched node is:
 | Verifier                               | Total tx gas | Calldata gas | Execution gas |
 | -------------------------------------- | ------------ | ------------ | ------------- |
 | baseline octic (standard EVM)          | `7,190,470`  | `753,800`    | `6,415,670`   |
-| precompile-backed octic (patched node) | `4,722,241`  | `753,800`    | `3,947,441`   |
-| savings                                | `2,468,229`  | `0`          | `2,468,229`   |
+| precompile-backed octic (patched node) | `4,345,429`  | `753,800`    | `3,570,629`   |
+| savings                                | `2,845,041`  | `0`          | `2,845,041`   |
 
 The Rust precompile implementation calls Plonky3 field types directly:
 

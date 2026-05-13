@@ -41,17 +41,11 @@ This workspace contains several sibling projects. They serve different roles:
 - `spartan-whir` defines its own Keccak challenger (`CanonicalSerializingChallenger32` in `canonical_challenger.rs`) that observes field elements in canonical form (`as_canonical_u32().to_le_bytes()`). It satisfies the same `FieldChallenger` trait that `whir-p3` requires, without modifying vendored Plonky3.
 - Spartan domain separator: `keccak256(DomainSeparator::to_bytes())` produces a 32-byte hash that is observed into the challenger. The raw 76-byte preimage is NOT observed directly.
 - WHIR domain separator: a `Vec<F>` pattern of field elements observed via `challenger.observe_slice(...)`.
-- Transcript byte-level compatibility between Rust and Solidity is the single highest correctness risk. If the Solidity challenger produces even one different byte during observe or sample operations, every subsequent challenge will diverge and the proof will be rejected.
+- See `./sol-spartan-whir/AGENTS.md` for Solidity transcript-compatibility rules.
 
 ### Proof format
 
-- The Rust proof is encoded via `codec_v1.rs` as the full Spartan binary blob format.
-- The standalone-WHIR Solidity verifier has three paths:
-  - **Native blob verifier** (`WhirBlobVerifierNative4`): production path. Reads the fixed-shape quartic blob directly from calldata.
-  - **Typed ABI verifier** (`WhirVerifier4`): parity/test path. Uses `abi.encode`/`abi.decode` for debuggability.
-  - **Blob decode-and-delegate wrapper** (`WhirBlobVerifier4`): decodes the blob into typed structs, then delegates to the typed verifier.
-- The blob layout mixes encoding conventions on purpose (transcript-native LE for sections fed to the challenger, big-endian or packed for Merkle sections). Don't reorganize for consistency — the layout is optimized for gas. Any changes need benchmarking.
-- Full-Spartan blob support (encoding the outer Spartan proof + WHIR together) is still later-stage work. The current blob is standalone-WHIR only.
+See `./sol-spartan-whir/AGENTS.md` for Solidity verifier proof-format paths, blob-layout rules, and EVM compatibility constraints.
 
 ## Rules for This Workspace
 
@@ -102,50 +96,20 @@ Prefer plain language instead:
 
 Technical precision still matters, but the default should be readable prose, not commit-log jargon.
 
-### Verification-facing changes are protocol surface
-
-Any change to transcript ordering, proof encoding, digest layout, Merkle hashing, or domain separator construction will break the Solidity verifier if not mirrored there. These are protocol-level changes. When making such a change, state explicitly which Solidity components are affected and what needs to be updated.
-
 ### Dated "current state" sections must keep their dates in sync
 
 If a section title or label says "current" and also includes a date, treat that date as part of the maintained content. When you update the contents of that section, update the date too. Do not leave a stale date attached to fresh numbers or conclusions.
 
-### Exporter runs: always use release mode
+### Solidity verifier rules live with the Solidity repo
 
-The fixture exporter does real proving work and can be very slow in debug builds. When regenerating fixtures or generated Solidity from `spartan-whir-export`, always run the exporter in release mode:
+Solidity-only rules now live in `./sol-spartan-whir/AGENTS.md`, including:
 
-- `cargo run --release -p spartan-whir-export --bin export-fixtures -- <output-dir>`
-
-Do not use the debug `cargo run` path for normal fixture regeneration unless you are intentionally debugging the exporter itself.
-
-### Source-of-truth boundaries
-
-- **Verification logic**: `./spartan-whir/src/protocol.rs`, `./spartan-whir/src/whir_pcs.rs`, `./whir-p3/src/whir/verifier/mod.rs`.
-- **Field arithmetic**: `./Plonky3/koala-bear/src/koala_bear.rs`, `./Plonky3/field/src/extension/binomial_extension.rs`.
-- **Hashing**: `./spartan-whir/src/hashers.rs`.
-- **Merkle multiproof**: `./whir-p3/src/whir/merkle_multiproof.rs`.
-- **Proof types**: `./whir-p3/src/whir/proof.rs`.
-- **Config derivation**: `./whir-p3/src/whir/parameters.rs`.
-- **Domain separator**: `./spartan-whir/src/domain_separator.rs`, `./whir-p3/src/fiat_shamir/domain_separator.rs`.
-- **Structural patterns only**: `./sol-whir/` (Foundry layout, gas harness, Merkle queue structure).
-
-### EVM verifier compatibility takes priority
-
-The `spartan-whir` crate has its own `AGENTS.md` with detailed rules. The key constraint for this workspace: changes that make EVM verification harder, less efficient, or incompatible with the current plan should be rejected, even if they improve other aspects of the system (code cleanliness, Rust abstraction quality, prover performance, etc.).
-
-### The `keccak_no_prefix` feature flag must stay disabled
-
-The Solidity verifier assumes Keccak hashing with domain-separation prefix bytes (`0x00` for leaves, `0x01` for nodes). Enabling the `keccak_no_prefix` feature flag would remove these prefixes and silently break every Merkle verification in the Solidity verifier. Do not enable it.
-
-### Extension degree: quartic first, octic required
-
-The Solidity verifier architecture supports both extension degrees from the start. Quartic (degree 4) is implemented first because it has fewer coefficients and is easier to debug. Octic (degree 8) is needed for full algebraic security and must pass all tests before the Spartan verifier stage is considered complete. Both use the irreducible polynomial X^d - 3.
-
-### Folding Schedule
-
-`spartan-whir` currently hardcodes `FoldingFactor::Constant(...)` when building the WHIR config (see `whir_pcs.rs` line 311). The Solidity plan now targets a **schedule-generic verifier core** from the first implementation: the runtime-config verifier should consume the derived per-round schedule from exported config data instead of assuming a constant folding factor in code.
-
-Changing Rust to `ConstantFromSecondRound` is a protocol-surface change: it changes the derived round schedule, WHIR Fiat-Shamir pattern, and fixed-config verifier constants. Do not change the folding-factor variant without following the schedule-tuning process in `./README.md` and regenerating all affected fixtures/generated code.
+- fixture/exporter command conventions
+- source-of-truth anchors for verifier logic and field arithmetic
+- EVM compatibility rules
+- Keccak Merkle prefix requirements
+- extension-degree and folding-schedule constraints
+- gas profiling, tx benchmarking, and `via_ir` workflows
 
 ## Solidity Verifier Workflows
 
